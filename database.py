@@ -16,12 +16,24 @@ class DB:
         self.client = MongoClient("mongodb://localhost:27017/")
         self.db = self.client[DB_NAME]
     
-    def init(self):
-        self.populate_contrats_from_csv()
-        self.populate_documents_from_fs()
-        print(self.db.contrats.count_documents({}), " contrats")
-        print(self.db.documents.count_documents({}), " documents")
-        return 
+    def init(self, contract_file="TK2501333.csv",docs_dir="./avenants_input/", reset=True):
+        self.populate_contrats_from_csv(contract_file, reset)
+        self.populate_documents_from_fs(docs_dir, True)
+        
+        
+        self.nb_contrat = self.db.contrats.count_documents({})
+        self.nb_doc = self.db.documents.count_documents({}) 
+        print(f"\t-Nb contrats: {self.nb_contrat}")
+        print(f"\t-Nb documents: {self.nb_doc}")
+        self.nb_ref = self.db.documents.count_documents({"ref":{"$ne":None}}) 
+        self.nb_found = self.db.documents.count_documents({"found": True})
+        print(f"\t- Documents avec une référence de contrat:{self.nb_ref}")
+        print(f"\t- Documents appairés:{self.nb_found}")
+        self.ratio_found = float(self.nb_found/self.nb_ref)
+        self.ratio_ref =float(self.nb_ref / self.nb_doc)
+        self.global_score = float(self.nb_found / self.nb_doc)
+        print(f"Soit un % de correspondance global de {self.global_score * 100} %")
+        return self
     
     def preprocess(self):
         if self.db.contrats.count_documents({}) == 0 or self.db.contrats.count_documents({}): 
@@ -41,19 +53,27 @@ class DB:
             return d.found
         query = {"cie.name": d.cie.name,"$or": [{"poledi":{"$regex":d.ref.strip()}},{"polnum":{"$regex":d.ref.strip()}}]}
         nb_match = self.db["contrats"].count_documents(query)
-        if nb_match == 0 and not hasattr(d, "original_ref"):
-            if d.cie.name == "GROUPAMA":
+        if nb_match == 0:
+            if not hasattr(d, "original_ref") and d.cie.name == "GROUPAMA":
+                print("2 try")
                 d.original_ref = d.ref
                 d.ref = d.ref.split("/")[1]
-                return self.search_doc_in_contracts(self, d)
+                return self.search_doc_in_contracts(d)
             return d.found
+        # print(d.ref, nb_match)
         d.found = True
         first_match = self.db["contrats"].find_one(query)
         d.matches = {"count": nb_match, "poledi_num": self.db["contrats"].find(query).distinct('poledi')}
+        d.catcod = first_match['catcod']
+        d.prd = first_match['prd']
+        d.opt = first_match['opt']
+        d.fam = first_match['fam']
         d.poledi = first_match["poledi"]
         d.polnum = first_match["polnum"]
         d.entrai = first_match["entrai"]
         d.numper = first_match["numper"]
+        d.cie.nom = first_match["cienom"]
+        d.cie.num = first_match["cienum"]
         return d.found
     
     def store_doc(self, d, reset=False):
@@ -61,7 +81,10 @@ class DB:
             self.db["documents"].insert_one(d.__document__())
             return d
         record = self.db.documents.find_one({"filename": d.filename}, {"_id":1})
-        self.db["documents"].update_one({"_id": record["_id"]}, {"$set":d.__document__()})
+        if record is not None:
+            self.db["documents"].update_one({"_id": record["_id"]}, {"$set":d.__document__()}, True)
+        else:
+            self.db["documents"].insert_one(d.__document__())
         return d
     
     def populate_documents_from_fs(self, input_dir="./avenants_input/", reset = False):
@@ -74,15 +97,55 @@ class DB:
                 d = Document(filepath)
                 self.search_doc_in_contracts(d)
                 self.store_doc(d)
+                print(d.filename, d.ref, d.found, d.poledi)
+    def export_documents(self, input_dir="./avenants_input/", output_dir= "./results/",output_ko_dir="KO"):
+        for filepath in glob(os.path.join(input_dir, '**', '*.pdf'), recursive=True):
+            #if still ALLIANZ in documents
+            if not "AZ" in filepath:
+                d = Document(filepath)
+                os.path
+                self.search_doc_in_contracts(d)
+                # self.store_doc(d)
+                if d.found:
+                    d.output_filename = f"{d.numper}.pdf"
+                    d.output_filepath = os.path.join(output_dir, d.ouput_filepath)
+                    shutil.copy(d.input_filepath, d.output_filepath)
+                    DB.stats.insert_one({
+                        "status": "OK", 
+                        "cie.name": d.cie.name, 
+                        "input_filepath": d.input_filepath, 
+                        "output_filepath":d.output_filepath,
+                        "reference": d.ref,
+                        "poledi": d.poledi,
+                        "entrai": d.entrai,
+                        "polnum": d.polnum,
+                        "numper": d.numper
+                        })
+                else:
+                    if d.ref is not None:
+                        DB.stats.insert_one({
+                            "status": "KO", 
+                            "cie.name": d.cie.name, 
+                            "input_filepath": d.input_filepath, 
+                            "reference": d.ref,
+                            "commentaire": "Référence non trouvée dans la base de contrats."
+                            })
+                    else:
+                        DB.stats.insert_one({
+                            "status": "KO", 
+                            "cie.name": d.cie.name, 
+                            "input_filepath": d.input_filepath, 
+                            "reference": d.ref,
+                            "commentaire": "Référence non detectée dans le texte."
+                            })
                 
+                 
                 
 
 
-    def populate_contrats_from_csv(self, csv_filename="TK2501333.csv", delimiter=";"):
-        self.db["contrats"].drop()
-        #self.db.contrats.createIndex({"polnum":1, "poledi":1}, { "unique": True } )
-
-
+    def populate_contrats_from_csv(self, csv_filename="TK2501333.csv", reset=False, delimiter=";"):
+        if reset:
+            self.db["contrats"].drop()
         with open(csv_filename, 'r', encoding='latin-1', errors='ignore') as csvfile:
             spamreader = csv.DictReader(csvfile, delimiter=delimiter)
             for i, row in enumerate(spamreader):
@@ -99,13 +162,13 @@ class DB:
                     corr_row["POLNUM"] = corr_row["POLNUM"].strip()
                     c = Contrat(corr_row)
                     # if self.db["contrats"].find_one({"poledi": c.poledi, "polnum": c.polnum}) is not None: 
-                    self.db["contrats"].insert_one(c.__dict__)
+                    self.db["contrats"].insert_one(c.__document__())
                 else:
                     try:
                         row["POLNUM"] = row["POLNUM"].strip()
                         c = Contrat(row)
                         # if self.db["contrats"].find_one({"poledi": c.poledi, "polnum": c.polnum}) is not None: 
-                        self.db["contrats"].insert_one(c.__dict__)
+                        self.db["contrats"].insert_one(c.__document__())
                         # self.db["contrats"].insert_one(c.__dict__)
                     except Exception as e:
                         print(i+1, e)
@@ -149,24 +212,14 @@ class DB:
         ])
         return self.db.cie_documents.find({})
     
-    # def get_ref_not_found_in_docs_by_cie(self, cie_name="HUMANIS"):
-        
-    #     for doc in self.db.documents.find({'cie.name':cie_name, 'ref': None}):
-    #         print(doc["filename"], doc["ref"])
-    #         n = re.search(r"\s(n|N)°(?P<ref>.?\d*)\s", doc["text"])
-    #         print(n)
-            # d = Document(doc["input_filepath"])
-            # d.get_match()
-            # if d.ref is not None:
-            #     self.search_doc_in_contracts(d)
-            # self.db.documents.update_one({"_id": doc["_id"]}, {"$set":d.__document__()})
+    
             
 
 if __name__ == "__main__":
     db = DB("AVENANTS_2")
     # db.get_ref_not_found_in_docs_by_cie()
     # db.reset()
-    db.init()
+    db.init(contract_file="TK2501333.csv",docs_dir="./avenants_input/", reset=True)
     # db.preprocess()
     # db.populate_documents_from_fs("./avenants_input/")
     # db.group_document_by_cie()
