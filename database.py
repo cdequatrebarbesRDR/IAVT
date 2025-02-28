@@ -16,7 +16,7 @@ class DB:
         self.client = MongoClient("mongodb://localhost:27017/")
         self.db = self.client[DB_NAME]
     
-    def init(self, contract_file="TK2501333.csv",docs_dir="./avenants_input/", reset=True):
+    def init(self, contract_file="TK2501333.csv",docs_dir="./avenants_input/", results_dir="./results/", reset=True, export=True):
         self.populate_contrats_from_csv(contract_file, reset)
         self.populate_documents_from_fs(docs_dir, True)
         
@@ -33,6 +33,8 @@ class DB:
         self.ratio_ref =float(self.nb_ref / self.nb_doc)
         self.global_score = float(self.nb_found / self.nb_doc)
         print(f"Soit un % de correspondance global de {self.global_score * 100} %")
+        if export:
+            self.export_documents(docs_dir, results_dir)
         return self
     
     def preprocess(self):
@@ -98,12 +100,12 @@ class DB:
                 self.search_doc_in_contracts(d)
                 self.store_doc(d)
                 print(d.filename, d.ref, d.found, d.poledi)
-    def export_documents(self, input_dir="./avenants_input/", output_dir= "./results/",output_ko_dir="KO"):
+    def export_documents(self, input_dir="./avenants_input/", output_dir= "./results/"):
         for filepath in glob(os.path.join(input_dir, '**', '*.pdf'), recursive=True):
             #if still ALLIANZ in documents
             if not "AZ" in filepath:
                 d = Document(filepath)
-                os.path
+                ko_dir = os.mkdirs(os.Path.join(os.getcwd(), "KO", d.cie.name))
                 self.search_doc_in_contracts(d)
                 # self.store_doc(d)
                 if d.found:
@@ -122,6 +124,9 @@ class DB:
                         "numper": d.numper
                         })
                 else:
+                    d.output_filename = f"{d.filename}.pdf"
+                    d.output_filepath = os.path.join(ko_dir, d.ouput_filepath)
+                    shutil.copy(d.input_filepath, d.output_filepath)
                     if d.ref is not None:
                         DB.stats.insert_one({
                             "status": "KO", 
@@ -136,7 +141,7 @@ class DB:
                             "cie.name": d.cie.name, 
                             "input_filepath": d.input_filepath, 
                             "reference": d.ref,
-                            "commentaire": "Référence non detectée dans le texte."
+                            "commentaire": "Référence non détectée dans le texte."
                             })
                 
                  
@@ -219,7 +224,7 @@ if __name__ == "__main__":
     db = DB("AVENANTS_2")
     # db.get_ref_not_found_in_docs_by_cie()
     # db.reset()
-    db.init(contract_file="TK2501333.csv",docs_dir="./avenants_input/", reset=True)
+    db.init(contract_file="TK2501333.csv",docs_dir="./avenants_input/", reset=True, export=False)
     # db.preprocess()
     # db.populate_documents_from_fs("./avenants_input/")
     # db.group_document_by_cie()

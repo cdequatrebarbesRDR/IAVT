@@ -14,6 +14,7 @@ COMPAGNIE_FOLDER_CIENOM = {
     'AZ': 'ALLIANZ',
     "AXA": "AXA",
     "APICIL": "APICIL",
+    # "CNP ASSURANCES": "CNP",
     "CNP": "CNP",
     "GAN": "GROUPAMA",
     "GENERALI": "GENERALI",
@@ -51,14 +52,16 @@ class Compagnie:
     def __init__(self):
         '''une compagnie peut être qualifiée par un nom de dossier ou un nom dans la base
         on lui donne un nom normalisé entre les deux
-        attention: toutes les assurances dans la base n'ont pas forcement de dossier
+        attention: toutes les assurances dans la base n'ont pas forcément de dossier
+        pour l'indexation
         '''
         self.db_name = None
-        self.folder_name = None
+        self.folder_name = None 
         self.name = None
         self.id =  None
         self.search_in_fn= True
         self.search_in_txt = False
+        # self.pattern_txt = r"(N|n)°(?P<ref>.*?\d{4}.*?)\s"
         
         
     def build_from_db(self, row:dict):
@@ -105,10 +108,11 @@ class Compagnie:
                 self.pattern_txt = re.compile(r"(?P<ref>\d*[A-Z])/s")
                 #self.fn_ref = filename.split("_")[-1]
             elif self.name in ["MUTUELLE GENERALE"]:
+                #LMG_REV_STD_LAVT_PREV_MG_P_23394400MAP_FABRICATION_ET_MONTAGE_DE.pdf
                 self.pattern_fn = re.compile(r"_[A-Z]{2}_[A-Z]{1,2}_\d{8}[A-Z]{3}_")
                 #self.pattern_fn = re.compile(r"_[A-Z]*_[A-Z]_\d*[A-Z]*_")
                 self.pattern_txt = re.compile(r"(?P<ref>[A-Z]*\/[A-Z]\/\d*[A-Z]*)/s")
-                #LMG_REV_STD_LAVT_PREV_MG_P_23394400MAP_FABRICATION_ET_MONTAGE_DE.pdf
+                
                 
             else:
                 raise NotImplementedError(f"Cie {self.name} rule extraction is not implemented")
@@ -130,8 +134,10 @@ class Compagnie:
                 #GROUPAMA N°.Contrat.:.\d/{4}/\d{6}/\d{5}
                 self.pattern_txt = re.compile(r"N°.Contrat.*?(?P<ref>\d*\/\d*\/\d*)")
             elif self.name == "HENNER":
+                #HENNER  N°.\d{5}\s
                 self.pattern_txt = re.compile(r"N°.*?(?P<ref>\d{5}.*?).")
             elif self.name == "HUMANIS":
+                 #HUMANIS N°.\d{6}.*?\(Offre .*?\)
                 self.pattern_txt = re.compile(r"[n|N]°.*?(?P<ref>\d{11,15}).*?\s")
             else:
                 self.pattern_txt = re.compile(r"\s.*?(?P<ref>\d{4,5}.*?)\s")
@@ -144,9 +150,9 @@ class Contrat:
         for k, v in cell.items():
             setattr(self, k.lower(), v)
         
-        c = Compagnie()
-        c.build_from_db(cell)
-    
+        self.cie = Compagnie()
+        self.cie.build_from_db(cell)
+        
     def __str__(self):
         print(f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.c["name"]} // RAISON SOCIALE {self.entraid}")
         return f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.c["name"]} // RAISON SOCIALE {self.entraid}"
@@ -160,10 +166,6 @@ class Contrat:
 class Document:
     def __init__(self, filepath: str):
         self.found = False
-        self.poledi = None
-        self.polnum = None
-        self.entrai = None
-        self.numper = None
         self.normalize_filename(filepath)
         self.get_compagnie(filepath)
         # retourner le numéro de contrat
@@ -173,13 +175,15 @@ class Document:
     def get_compagnie(self, filepath):
         # self.cie = {"name": "", "folder": ""}
         for cie_dir,cie_name  in COMPAGNIE_FOLDER_CIENOM.items():
-            if "/"+cie_dir+"/" in filepath:
+            
+            if "/"+cie_dir in filepath:
                 c = Compagnie()
                 c.build_from_folder(cie_dir)
                 c.get_rules()
                 # cast to dict to insert in mongo
                 self.cie = c
                 return self.cie
+        print(f"Compagnie not found from path {filepath}")
         self.cie = Compagnie()
         return self.cie
 
@@ -236,7 +240,6 @@ class Document:
             #re.search in filename
 
             chunks_filename =  [n for n in self.filename.split("_") if n.isdigit() and len(n)>= 13]
-            print(chunks_filename)
             if len(chunks_filename) == 0:
                 chunks_filename =  [n for n in self.filename.split("_") if n.isdigit()]
                 if len(chunks_filename) == 1:
