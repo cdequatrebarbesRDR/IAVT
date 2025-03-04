@@ -9,7 +9,20 @@ import shutil
 import fitz
 import subprocess as sp
 # import spacy
+COMPAGNIE_NOM_RULES = {
+    'AXA': "AXA",
+    'Groupama Gan Vie': "GROUPAMA",
+    'La Garantie Obsèques': "HENNER",
+    'HENNER': 'HENNER',
+    "MALAKOFF HUMANIS": "HUMANIS",
+    "QUATREM": "HUMANIS",
+    "uniprevoyance": "UNIPREVOYANCE",
+    "La Mutuelle Générale": "MUTUELLE GENERALE",
+    "LA MUTUELLE GENERALE": "MUTUELLE GENERALE",
+    "CNP Assurances": "CNP"
 
+
+}
 COMPAGNIE_FOLDER_CIENOM = {
     'AZ': 'ALLIANZ',
     "AXA": "AXA",
@@ -22,7 +35,8 @@ COMPAGNIE_FOLDER_CIENOM = {
     "HENNER": "HENNER",
     "LMG":"MUTUELLE GENERALE",
     "MH": "HUMANIS",
-    "UNIPREVOYANCE": "UNIPREVOYANCE"
+    "UNIPREVOYANCE": "UNIPREVOYANCE",
+    "LA GARANTIE OBSEQUES": 'La Garantie Obsèques' 
 }
 
 COMPAGNIE_DB_CIENOM = {
@@ -41,10 +55,10 @@ COMPAGNIE_DB_CIENOM = {
     'HUMANIS (ex  APRIONIS)': 'HUMANIS', 
     'MALAKOFF HUMANIS COURTAGE': 'HUMANIS', 
     'MALAKOFF/URRPIMMEC' : 'HUMANIS', 
+    "MUTUELLE GENERALE": "MUTUELLE GENERALE",
     'MG - MUTUELLE GENERALE': "MUTUELLE GENERALE", 
-    'MGD':  "MUTUELLE GENERALE",
-    'MGEN': "MUTUELLE GENERALE",
-    'UNIPREVOYANCE': "UNIPREVOYANCE"
+    'UNIPREVOYANCE': "UNIPREVOYANCE",
+    "LA GARANTIE OBSEQUES": "HENNER"
 }
 CIENOM_COMPAGNIE_DB = {v: k for k, v in COMPAGNIE_DB_CIENOM.items()}
 CIENOM_COMPAGNIE_FOLDER = {v: k for k, v in COMPAGNIE_FOLDER_CIENOM.items()}
@@ -61,7 +75,7 @@ class Compagnie:
         self.id =  None
         self.search_in_fn= True
         self.search_in_txt = False
-        # self.pattern_txt = r"(N|n)°(?P<ref>.*?\d{4}.*?)\s"
+        self.pattern_txt = r"(N|n)°(?P<ref>.*?\d{4}.*?)\s"
         
         
     def build_from_db(self, row:dict):
@@ -103,7 +117,7 @@ class Compagnie:
                 #UNIPREVOYANCE_A2P_COLMAR_4771300770000Z_SANTE.pdf
                 
             elif self.name in ["CNP"]:
-                #CNP%20ASSURANCES_01012025___AVENANT___GRAVIERE_DU_RHIN___2530A 
+                #CNP ASSURANCES_01012025___AVENANT___GRAVIERE_DU_RHIN___2530A 
                 self.pattern_fn = re.compile(r"_/d{4,5}[A-Z]\.pdf") 
                 self.pattern_txt = re.compile(r"(?P<ref>\d*[A-Z])/s")
                 #self.fn_ref = filename.split("_")[-1]
@@ -123,7 +137,7 @@ class Compagnie:
             self.pattern_txt = re.compile(r"\s.*?(?P<ref>\d{4,5}.*?000)\s")
             raise NotImplementedError(f"Cie {self.name} should not be indexed")
         
-        elif self.name in ["GROUPAMA", "HENNER", "HUMANIS"]:
+        elif self.name in ["GROUPAMA", "HENNER", "HUMANIS", "LA GARANTIE OBSEQUES"]:
             #HENNER  N°.\d{5}\s
             #GROUPAMA N°.Contrat.:.\d/{4}/\d{6}/\d{5}
             #HUMANIS N°.\d{6}.*?\(Offre .*?\)
@@ -133,14 +147,15 @@ class Compagnie:
             if self.name == "GROUPAMA":
                 #GROUPAMA N°.Contrat.:.\d/{4}/\d{6}/\d{5}
                 self.pattern_txt = re.compile(r"N°.Contrat.*?(?P<ref>\d*\/\d*\/\d*)")
-            elif self.name == "HENNER":
+            elif self.name in ["HENNER", "LA GARANTIE OBSEQUES"]:
                 #HENNER  N°.\d{5}\s
-                self.pattern_txt = re.compile(r"N°.*?(?P<ref>\d{5}.*?).")
+                # N° 15746/115
+                self.pattern_txt = re.compile(r"N°.*?(?P<ref>\d{5}.*?\s).")
             elif self.name == "HUMANIS":
                  #HUMANIS N°.\d{6}.*?\(Offre .*?\)
                 self.pattern_txt = re.compile(r"[n|N]°.*?(?P<ref>\d{11,15}).*?\s")
             else:
-                self.pattern_txt = re.compile(r"\s.*?(?P<ref>\d{4,5}.*?)\s")
+                self.pattern_txt = re.compile(r"\s.*?(?P<ref>\d*.*?)\s")
         return self
 
    
@@ -156,6 +171,7 @@ class Contrat:
     def __str__(self):
         print(f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.c["name"]} // RAISON SOCIALE {self.entraid}")
         return f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.c["name"]} // RAISON SOCIALE {self.entraid}"
+    
     def __document__(self):
         '''export to mongodb'''
         self.dict_xport = {k: v for k,v in self.__dict__.items() if "cie" not in k}
@@ -166,50 +182,88 @@ class Contrat:
 class Document:
     def __init__(self, filepath: str):
         self.found = False
+        self.ref = None
+        self.match = None
+        self.text = None
         self.normalize_filename(filepath)
-        self.get_compagnie(filepath)
-        # retourner le numéro de contrat
+        self.scan()
+        self.get_compagnie()
         self.get_match()
-        # A vérifier dans la base
         
-    def get_compagnie(self, filepath):
+    def get_compagnie(self):
+        if self.text is None:
+            self.scan()
+        '''Rechercher le numéro de la Compagnie d'Assurance dans le texte'''
+        for cie_name, cie_rules in COMPAGNIE_NOM_RULES.items():
+            c = Compagnie()
+            cie_match = re.search(cie_name, self.text)
+            if cie_match is not None:
+                c.build_from_name(cie_rules)
+                c.get_rules()
+                self.cie = c
+                return self.cie
+        print(f"Compagnie name not found in doc text : {self.filepath}.\n Trying in folder name")
         # self.cie = {"name": "", "folder": ""}
+        # Method using folder HINT
         for cie_dir,cie_name  in COMPAGNIE_FOLDER_CIENOM.items():
             
-            if "/"+cie_dir in filepath:
+            if "/"+cie_dir in self.filepath:
                 c = Compagnie()
                 c.build_from_folder(cie_dir)
                 c.get_rules()
+                print(re.search(c.name, self.text))
                 # cast to dict to insert in mongo
                 self.cie = c
                 return self.cie
-        print(f"Compagnie not found from path {filepath}")
         self.cie = Compagnie()
-        return self.cie
+        self.cie.name = "Unknown"
+        return self
 
-    def normalize_filename(self, filepath):
+    def guess_fam(self):
+        '''Rule to detect famille de risque'''
+        if " santé " or " sante " in self.text.lower():
+            self.famille = "MAL"
+        elif " prévoyance" or " prevoyance" in self.text.lower():
+            self.famille = "PRE"
+        elif " obseque " or " obsèque " in self.text.lower():
+            self.famille = "OBS"
+        else:
+            self.famille = "DIV"
+        return self.famille
+
+    def normalize_filename(self, filepath, output_dir="CANDIDATES"):
+        '''Slugify filename and write text into doc .txt'''
         self.input_filepath = filepath
         chunks = filepath.split('/')
         filename = chunks[-1]
-        output_dir = os.path.join(os.getcwd(), "DOCS")
+        self.output_dir = os.path.join(os.getcwd(), output_dir)
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
         self.filename = re.sub(r"[&|\(|\)|']", "", re.sub(r"[\s+|-]", "_", filename))
-        self.filepath = os.path.join(output_dir, self.filename)
+        self.filepath = os.path.join(self.output_dir, self.filename)
+        self.filetxt = os.path.join(self.output_dir, self.filename.replace(".pdf", ".txt"))
         if not os.path.exists(self.filepath):
             shutil.copy(filepath, self.filepath)    
+        self.scan()
+        with open(self.filetxt, "w") as f:
+            f.write(self.text)
+            
         return self
     
     def get_match(self):
-        self.ref = None
         if self.cie.search_in_fn:
-            self.ref = self.search_ref_in_filename()
-            if self.ref is not None:
-                return self.ref
+            self.search_ref_in_filename()
+            return self.validate_ref_in_text()
+                 
         return self.search_ref_in_text()
+    
     def scan(self):
-        self.get_text()
         if self.text is None:
-            self.ocr_pdf()
+            self.get_text()
+            if self.text is None:
+                self.ocr_pdf()
         return self.text
+    
     def ocr_pdf(self):
         '''OCR only if not scanned'''
         # output_file = os.path.join(self.output_dir, "TMP_"+self.filename)
@@ -236,46 +290,99 @@ class Document:
         return self.text
       
     def search_ref_in_filename(self):
-        if self.cie.name in  ["UNIPREVOYANCE", "AXA"]:
-            #re.search in filename
-
-            chunks_filename =  [n for n in self.filename.split("_") if n.isdigit() and len(n)>= 13]
-            if len(chunks_filename) == 0:
-                chunks_filename =  [n for n in self.filename.split("_") if n.isdigit()]
-                if len(chunks_filename) == 1:
-                    self.ref = chunks_filename[0]
-                return self.ref
-            if len(chunks_filename) == 1 :
-                self.ref = chunks_filename[0]
-                return self.ref
+        '''Some of the documents have a ref number in the filename: used as a hint'''
+        chunks_filename = self.filename.replace(".pdf", "").split("_")
+        if self.cie.name == "CNP":
+            self.found = True
+            self.ref = chunks_filename[-1]
+            return (self.found, self.ref)
+        if self.cie.name in ["UNIPREVOYANCE", "AXA"]:
+            #ADIL_67_4360135480000V_SANTE.pdf
+            filtered_chunks = [n for n in chunks_filename if len(n) >= 13]
+            if len(filtered_chunks) == 0:
+                self.ref = None
+            elif len(filtered_chunks) == 1:
+                self.ref = filtered_chunks[0]
+                self.found = True
             else:
-                print("MULTIPLE REFS", self.cie.name, "NOT FOUND", chunks_filename, self.filename)
-                return self.ref
-            
+                filtered_chunks = [n for n in filtered_chunks if n[0:11].isdigit()]
+                if len(filtered_chunks) == 1:
+                    self.ref = filtered_chunks[0]
+                    self.found = True
+                else:
+                    self.ref = None
+
+            return (self.found, self.ref)
+                    
         if self.cie.name == "MUTUELLE GENERALE":
             #LMG_REV_STD_LAVT_SANTE_NR_PMSS_MG_S_20235500PAN_SACOR.pdf
             chunks_fn = self.filename.split("_")
-            pos_ref =  [i for i,n in enumerate(chunks_fn) if n[:7].isdigit()]
+            pos_ref =  [i for i,n in enumerate(chunks_filename) if n[:7].isdigit()]
             if len(pos_ref) != 0:
                 pos_ref = pos_ref[0]
                 self.ref = "/".join(chunks_fn[pos_ref-2: pos_ref+1])
-                return self.ref
+                self.found = True
+            return (self.found, self.ref)
             
-        if self.cie.name == "CNP":
-            self.ref = self.filename.split("_")[-1].replace(".pdf", "")
-            return self.ref
         return self.ref
     
     def search_ref_in_text(self):
-        self.scan()
+        '''Search contrat nb in text given a pattern'''
         m = re.search(self.cie.pattern_txt, self.text)
         if m is None:
-            return self.ref
+            return (self.match, self.ref)
+        self.match = True
         self.ref = m.group("ref").strip()
         if self.cie.name == "GROUPAMA":
             self.ref = "/".join(self.ref.split("/")[0:2])
-        return self.ref
+        return (self.match, self.ref)
     
+    def validate_ref_in_text(self):
+        '''Search complete contrat nb in text given a ref pattern'''
+        self.match = False
+        if self.cie.name == "UNIPREVOYANCE":
+            self.target = re.compile(fr"(?P<ref2>[A-Z]\d*)\s\/.*?(?P<ref>{self.ref})")
+            match = list(set(["".join([m[1], m[0]]) for m in re.findall(self.target, self.text) if m is not None]))
+            if len(match) > 0:
+                self.original_ref = self.ref
+                self.ref = match[0]
+                self.match = True
+                return (self.match, self.ref)  
+            return self.search_ref_in_text()
+                           
+        if self.cie.name == "AXA":
+            self.target = re.compile(fr"{self.ref}((?P<ref2>[A-Z])|\s\/[A-Z]*\s(?P<ref3>\d*))\s")
+            match = list(set([m for m in re.findall(self.target, self.text) if m is not None ]))
+            if len(match) == 2:
+                self.match = True   
+                additional_ref = sorted([[n for n in m_group if n != ''][-1] for m_group in match], reverse=True)
+                self.ref = self.ref+ "".join(additional_ref)
+                return (self.match, self.ref)
+            return self.search_ref_in_text()
+            
+        
+        if self.cie.name == "CNP":
+            self.target = fr"(?P<ref2>{self.ref})"
+            self.pattern_txt = re.compile(self.target)
+        
+        if self.cie.name == "MUTUELLE GENERALE":
+            print("SELF.REF", self.ref)
+            regex_ref = self.ref.split("/")
+            self.target = fr"(?P<ref2>{regex_ref[0]}.*?{regex_ref[1]}.*?{regex_ref[2]})"
+            self.pattern_txt = re.compile(self.target)
+        match = list(set([m for m in re.findall(self.target, self.text) if m is not None]))
+        if len(match) == 0:
+            return self.search_ref_in_text()
+        if len(match) == 1:
+            self.match = True
+            self.ref = re.sub("/s", "", match[0])
+            return (self.match, self.ref)
+        
+        self.match = True
+        self.ref = re.sub("/s", "", " ".join(match))
+        return (self.match, self.ref)
+
+
     def __str__(self):
         return f"Document ({self.filename})"
     def __document__(self):
@@ -287,11 +394,19 @@ class Document:
     
     
 if __name__ == "__main__":
-    pass
-    # d3 = Document('./avenants_input/MH/TIR/CONTRATS_20241118_001662_11.pdf')
-    # assert d3.cie["name"] == "HUMANIS"
-    # d3.match("")
-    # print(d3.target)
-    # d3= Document("./avenants_input/AXA/TIR/AVT/KO/DECIBEL FRANCE_2263898110400_1.pdf")
-    # d3.match("")
-    # print(d3.target)
+    d1 = Document("./avenants_input/CNP ASSURANCES/AVT/01012025 - AVENANT - COUVENT DES SOEURS FRANCISCAINES - 2529Z.pdf")
+    assert (d1.cie.name == "CNP", d1.cie.name)
+    assert (d1.ref == "2529Z", d1.ref)
+    d2 = Document("./avenants_input/AXA/TIR/AVT/AFCE FORMATION_2275781410000_1.pdf")
+    assert (d2.cie.name == "AXA")
+    assert (d2.ref == "2275781410000Z50", d2.ref)
+    d3 = Document('./avenants_input/MH/TIR/CONTRATS_20241118_001662_11.pdf')
+    assert (d3.cie.name == "HUMANIS")
+    assert (d3.ref == None, d3.ref)
+    d4 = Document("./avenants_input/UNIPREVOYANCE/TIR/AVT/ADAX'O INTERNATIONAL_4360136160000B_SANTE.pdf")
+    assert (d4.cie.name == "UNIPREVOYANCE")
+    assert (d4.ref == "4360136160000BF2417", d4.ref)
+    d5= Document("./avenants_input/LMG/AVT/REV_STD_LAVT_SANTE_R_PMSS_MG-S-2012275S_TREVNAS_FLUVIAL.pdf")
+    assert (d5.cie.name == "MUTUELLE GENERALE")
+    assert (d5.ref == "MG/S/2012275S", d5.ref)
+   

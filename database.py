@@ -19,8 +19,6 @@ class DB:
     def init(self, contract_file="TK2501333.csv",docs_dir="./avenants_input/", results_dir="./results/", reset=True, export=True):
         self.populate_contrats_from_csv(contract_file, reset)
         self.populate_documents_from_fs(docs_dir, True)
-        
-        
         self.nb_contrat = self.db.contrats.count_documents({})
         self.nb_doc = self.db.documents.count_documents({}) 
         print(f"\t-Nb contrats: {self.nb_contrat}")
@@ -52,30 +50,59 @@ class DB:
     def search_doc_in_contracts(self, d):
         d.found = False
         if d.ref is None:
+            print(d.filename, d.ref, False, 0)
             return d.found
-        query = {"cie.name": d.cie.name,"$or": [{"poledi":{"$regex":d.ref.strip()}},{"polnum":{"$regex":d.ref.strip()}}]}
+        
+       
+        query = {
+            "$or":[
+                {"poledi":{"$regex":d.ref.strip()}}, 
+                {"polnum":{"$regex":d.ref.strip()}}
+            ]
+        }
         nb_match = self.db["contrats"].count_documents(query)
+        print(d.filename, d.ref, d.match, nb_match)
         if nb_match == 0:
             if not hasattr(d, "original_ref") and d.cie.name == "GROUPAMA":
-                print("2 try")
                 d.original_ref = d.ref
                 d.ref = d.ref.split("/")[1]
                 return self.search_doc_in_contracts(d)
             return d.found
-        # print(d.ref, nb_match)
+        #Un seul numéro de contrat
+        poledis = self.db["contrats"].find(query).distinct('poledi')
+        numperiodes = self.db["contrats"].find(query).distinct('numper')
         d.found = True
-        first_match = self.db["contrats"].find_one(query)
-        d.matches = {"count": nb_match, "poledi_num": self.db["contrats"].find(query).distinct('poledi')}
-        d.catcod = first_match['catcod']
-        d.prd = first_match['prd']
-        d.opt = first_match['opt']
-        d.fam = first_match['fam']
-        d.poledi = first_match["poledi"]
-        d.polnum = first_match["polnum"]
-        d.entrai = first_match["entrai"]
-        d.numper = first_match["numper"]
-        d.cie.nom = first_match["cienom"]
-        d.cie.num = first_match["cienum"]
+        if len(poledis) == 1:
+            
+            first_match = self.db["contrats"].find_one(query) 
+            # Un seul numéro de période
+            if len(numperiodes) == 1:
+                
+                first_match = self.db["contrats"].find_one(query)
+                d.catcod = first_match['catcod']
+                d.prd = first_match['prd']
+                d.opt = first_match['opt']
+                d.fam = first_match['fam']
+                d.poledi = poledis[0]
+                d.polnum = first_match["polnum"]
+                d.entrai = first_match["entrai"]
+                d.numper = numperiodes[0]
+            else:
+                d.found = True
+                d.matches = {"count": nb_match, "poledis": poledis, "numpers": numperiodes}
+                d.poledi = poledis[0]
+                d.polnum = first_match["polnum"]
+                d.entrai = first_match["entrai"]    
+            
+        else:
+            if d.match:
+                for pedi in poledis:
+                    print(pedi, d.ref)
+                    # if pedi == d.ref:
+                    #     d.poledi = pedi
+            print(len(poledis), d.ref, poledis[0], poledis)
+
+        d.matches = {"count": nb_match, "poledis": poledis, "numpers": numperiodes}
         return d.found
     
     def store_doc(self, d, reset=False):
@@ -91,21 +118,41 @@ class DB:
     
     def populate_documents_from_fs(self, input_dir="./avenants_input/", reset = False):
         print(f"INSERTING DOCS from {input_dir} INTO DB")
+        ok_dir = "./results/OK/"
+        ko_dir = "./results/KO/"
+        if not os.path.exists(ok_dir):
+            os.makedirs(ok_dir)
+        if not os.path.exists(ko_dir):
+            os.makedirs(ko_dir)
         if reset:
             self.db.documents.drop()
         for filepath in glob(os.path.join(input_dir, '**', '*.pdf'), recursive=True):
             #if still ALLIANZ in documents
             if not "AZ" in filepath:
                 d = Document(filepath)
+                
                 self.search_doc_in_contracts(d)
                 self.store_doc(d)
-                print(d.filename, d.ref, d.found, d.poledi)
+
+                if d.found:
+                    print(d.cie.name, d.input_filepath, d.ref, d.found)
+                    output_pdf = os.path.join(ok_dir, d.filename)
+                    output_txt = os.path.join(ok_dir, d.filetxt)
+                    shutil.copy(d.input_filepath, output_pdf)
+                    shutil.move(d.filetxt, output_txt) 
+                else:
+                    output_pdf = os.path.join(ko_dir, d.filename)
+                    output_txt = os.path.join(ko_dir, d.filetxt)
+                    shutil.copy(d.input_filepath, output_pdf)
+                    shutil.move(d.filetxt, output_txt)
+                    print(d.cie.name, d.input_filepath, d.ref, d.found)
+                
     def export_documents(self, input_dir="./avenants_input/", output_dir= "./results/"):
         for filepath in glob(os.path.join(input_dir, '**', '*.pdf'), recursive=True):
             #if still ALLIANZ in documents
             if not "AZ" in filepath:
                 d = Document(filepath)
-                ko_dir = os.mkdirs(os.Path.join(os.getcwd(), "KO", d.cie.name))
+                ko_dir = os.makedirs(os.Path.join(os.getcwd(), "KO", d.cie.name))
                 self.search_doc_in_contracts(d)
                 # self.store_doc(d)
                 if d.found:
@@ -144,9 +191,6 @@ class DB:
                             "commentaire": "Référence non détectée dans le texte."
                             })
                 
-                 
-                
-
 
     def populate_contrats_from_csv(self, csv_filename="TK2501333.csv", reset=False, delimiter=";"):
         if reset:

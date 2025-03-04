@@ -43,6 +43,89 @@ Une fois la compagnie détectée, le parsing s'effectue en fonction de la règle
 | GROUPAMA |Non |Oui||N°.Contrat.:.\d{4}/\d{6}/\d{5}|\d{4}/\d{6}/\d{5}|
 | MUTUELLE GENERALE|Oui |Oui| LMG_REV_STD_LAVT_PREV_MG_P_23394400MAP_FABRICATION_ET_MONTAGE_DE.pdf| MG/P/23394400MAP|MG/P/23394400MAP|r"([A-Z]{2}/[A-Z]{1,2}/\d{8}[A-Z]{3})/s"
 
+
+Attention verifier que le numéro de période pour un numéro de contrat est unique.
+sinon recupérer la cat cod avec une règle de correspondance 
+- AXA 738 doc avec multiples numper pour un police edition
+- UNIPREVOYANCE verifier le numper pour une police d'edition
+- 
+
+Exclure les catcodes commencant:X,Z,K
+
+NON CADRES SELON DISPOSITIF
+
+NC 
+GNC
+NC1
+
+KCAD  CADRES SELON DISPOSITIF
+CAD CADRES SELON DISPOSITIF
+
+['ASS', 'CAD', 'ENS', 'NC', 'NCO']
+
+/avenants_input/AXA/TIR/AVT/AVT CP ANCR'EST_2263442630001_1 5687175.pdf >>> ['GNC', 'NC', 'NC1']
+
+
+
+{
+  'NC': "NON CADRES SELON DISPOSITIF"
+  'ZSN': "NON CADRES SELON DISPOSITIF" ==> 5115792, AXA/AVT CP WOERNER GMBH_2712482001700_1 5115792.pdf ???
+  "CAD": "CADRES SELON DISPOSITIF"
+  'KCA': "CADRES SELON DISPOSITIF"
+  'ENS': "ENSEMBLE DU PERSONNEL",
+  "ASS": "ENSEMBLE DU PERSONNEL",
+  "ZSE": "ENSEMBLE DU PERSONNEL/ DES SALARIES",
+  "XAS": "ENSEMBLE DES CONGES SANS SOLDE REGIME ALSACE MOSELLE" "/ALSACE CONDITIONNEMENT_2845379410060_1
+  'XAR': "RETRAITES"
+  "XRC": "RETRAITES CADRES"
+  'KCA': "CADRES SELON DISPOSITIF"
+  "XVA" : "AYANT DROIT D UN ASSURE DECEDE POUR UNE DUREE DE 12 MOIS"
+}
+
+"MAL": "Santé"
+"PRE": "Prévoyance"
+
+
+[
+  'ASS', 'CA1', 'CA3', 'CA4',
+  'CAD', 'EMP', 'ENS', 'ETM',
+  'KAS', 'KCA', 'KNC', 'MAI',
+  'MJO', 'NC',  'NCE', 'RCA',
+  'TNS', 'XAR', 'XAS', 'XCR',
+  'XNP', 'XNR', 'XRC', 'XRN',
+  'XVA', 'ZSA', 'ZSC', 'ZSE',
+  'ZSN'
+]
+
+#### Pour HENNER en fait c'est la ganarite obsèque
+
+aller chercher dans le texte les 3 numéro suivants N° (15519) si mention et sous gropupes
+Nom du polnum dans le fichier
+{
+    _id: ObjectId('67b99a19721de3209f72d551'),
+    numper: '500245292',
+    mut: '53',
+    grp: '',
+    entnum: '5001101',
+    entrai: 'OBSEQUES - DEPENDANCE - TELEASSISTANCE',
+    catcod: 'ZR',
+    prd: 'H-OBS 1504 45',
+    opt: 'OPT',
+    fam: 'OBS',
+    polnum: 'C_GOA2',
+    poledi: '15831/0',
+    datdeb: '20150501',
+    datfin: '99999999',
+    cienum: '9',
+    cienom: 'LA GARANTIE OBSEQUES',
+    cie: {
+      db_name: 'LA GARANTIE OBSEQUES',
+      folder_name: null,
+      name: null,
+      id: 9
+    }
+  },
+
 ### Requirements
 - sys requirement:
   - ocrmypdf
