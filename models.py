@@ -8,7 +8,9 @@ import shutil
 # import pdfplumber
 import fitz
 import subprocess as sp
-# import spacy
+# impor♣t spacy
+#from database import DB
+
 COMPAGNIE_NOM_RULES = {
     'AXA': "AXA",
     'Groupama Gan Vie': "GROUPAMA",
@@ -150,7 +152,8 @@ class Compagnie:
             elif self.name in ["HENNER", "LA GARANTIE OBSEQUES"]:
                 #HENNER  N°.\d{5}\s
                 # N° 15746/115
-                self.pattern_txt = re.compile(r"N°.*?(?P<ref>\d{5}.*?\s).")
+                #self.pattern_txt = re.compile(r"(N°.*?)?\s(ST)?(?P<ref>\d{5}(\d{3})?.*?\s)")
+                self.pattern_txt = re.compile(r"N°.*?(?P<ref>\d{5}(\d{3})?.*?\s).")
             elif self.name == "HUMANIS":
                  #HUMANIS N°.\d{6}.*?\(Offre .*?\)
                 self.pattern_txt = re.compile(r"[n|N]°.*?(?P<ref>\d{11,15}).*?\s")
@@ -180,20 +183,49 @@ class Contrat:
         
 
 class Document:
-    def __init__(self, filepath: str):
+    def __init__(self, *args, **kwargs):
+        self.numper = None
+        self.poledi = None
+        self.ref = None
+        self.polnum = None
+        self.entrai = None
+        self.entnum = None
+        self.fam = None
+        self.matches = {"count": 0, "poledis": [], "numpers": [], "catcods": [], "fams": []}
+        if isinstance(args[0],str):
+            self.build_from_path(args[0])
+        elif isinstance(args[0], dict):
+            self.build_from_db(args[0])
+        # if isinstance(args, str) or "filepath" in kwargs:
+        #     self.build_from_path(args)
+    def build_from_path(self, filepath:str):
         self.found = False
         self.ref = None
         self.match = None
         self.text = None
+        self.entnum = None
+        self.entrai = None
         self.normalize_filename(filepath)
         self.scan()
         self.get_compagnie()
-        self.get_match()
-        
+        self.get_ref() 
+    
+    def build_from_db(self, db_doc: dict):
+        for k,v in db_doc.items():
+            if k == "cie":
+                c = Compagnie()
+                c.build_from_name(v["name"])
+                c.get_rules()
+                setattr(self, "cie",c)
+            else: 
+                setattr(self, k,v)
+        return self
+
+
     def get_compagnie(self):
         if self.text is None:
             self.scan()
-        '''Rechercher le numéro de la Compagnie d'Assurance dans le texte'''
+        '''Rechercher le nom de la Compagnie d'Assurance dans le texte'''
         for cie_name, cie_rules in COMPAGNIE_NOM_RULES.items():
             c = Compagnie()
             cie_match = re.search(cie_name, self.text)
@@ -202,7 +234,7 @@ class Document:
                 c.get_rules()
                 self.cie = c
                 return self.cie
-        print(f"Compagnie name not found in doc text : {self.filepath}.\n Trying in folder name")
+        # print(f"Compagnie name not found in doc text : {self.filepath}.\n Trying with folder name")
         # self.cie = {"name": "", "folder": ""}
         # Method using folder HINT
         for cie_dir,cie_name  in COMPAGNIE_FOLDER_CIENOM.items():
@@ -211,7 +243,7 @@ class Document:
                 c = Compagnie()
                 c.build_from_folder(cie_dir)
                 c.get_rules()
-                print(re.search(c.name, self.text))
+                # print(re.search(c.name, self.text))
                 # cast to dict to insert in mongo
                 self.cie = c
                 return self.cie
@@ -221,15 +253,20 @@ class Document:
 
     def guess_fam(self):
         '''Rule to detect famille de risque'''
+        if " obseque " or " obsèque " in self.text.lower():
+            self.famille = "OBS"
+            return self.famille
         if " santé " or " sante " in self.text.lower():
             self.famille = "MAL"
-        elif " prévoyance" or " prevoyance" in self.text.lower():
+            return self.famille
+        if " prévoyance" or " prevoyance" in self.text.lower():
             self.famille = "PRE"
-        elif " obseque " or " obsèque " in self.text.lower():
-            self.famille = "OBS"
-        else:
-            self.famille = "DIV"
+            return self.famille
+        self.famille = "DIV"
         return self.famille
+    
+    def choose_numper_by_catcode(self, catcodes):
+        '''Given catcodes checkout text finding match from specific to generic'''
 
     def normalize_filename(self, filepath, output_dir="CANDIDATES"):
         '''Slugify filename and write text into doc .txt'''
@@ -250,11 +287,11 @@ class Document:
             
         return self
     
-    def get_match(self):
+    def get_ref(self):
         if self.cie.search_in_fn:
             self.search_ref_in_filename()
             return self.validate_ref_in_text()
-                 
+        self.match = True
         return self.search_ref_in_text()
     
     def scan(self):
@@ -286,7 +323,7 @@ class Document:
             if len(pages) == 0:
                 self.text = None
             else:
-                self.text = re.sub('\n', ' ', "\n".join(pages)).strip()        
+                self.text = re.sub(r"\s\s", ' ', " ".join(pages)).strip()        
         return self.text
       
     def search_ref_in_filename(self):
@@ -324,7 +361,7 @@ class Document:
                 self.found = True
             return (self.found, self.ref)
             
-        return self.ref
+        return (self.found, self.ref)
     
     def search_ref_in_text(self):
         '''Search contrat nb in text given a pattern'''
@@ -341,72 +378,166 @@ class Document:
         '''Search complete contrat nb in text given a ref pattern'''
         self.match = False
         if self.cie.name == "UNIPREVOYANCE":
-            self.target = re.compile(fr"(?P<ref2>[A-Z]\d*)\s\/.*?(?P<ref>{self.ref})")
-            match = list(set(["".join([m[1], m[0]]) for m in re.findall(self.target, self.text) if m is not None]))
+            self._target = re.compile(fr"(?P<ref2>[A-Z]\d*)\s\/.*?(?P<ref>{self.ref})")
+            match = list(set(["".join([m[1], m[0]]) for m in re.findall(self._target, self.text) if m is not None]))
             if len(match) > 0:
                 self.original_ref = self.ref
                 self.ref = match[0]
                 self.match = True
                 return (self.match, self.ref)  
-            return self.search_ref_in_text()
+            
                            
         if self.cie.name == "AXA":
-            self.target = re.compile(fr"{self.ref}((?P<ref2>[A-Z])|\s\/[A-Z]*\s(?P<ref3>\d*))\s")
-            match = list(set([m for m in re.findall(self.target, self.text) if m is not None ]))
+            self._target = re.compile(fr"{self.ref}((?P<ref2>[A-Z])|\s\/[A-Z]*\s(?P<ref3>\d*))\s")
+            match = list(set([m for m in re.findall(self._target, self.text) if m is not None ]))
             if len(match) == 2:
                 self.match = True   
                 additional_ref = sorted([[n for n in m_group if n != ''][-1] for m_group in match], reverse=True)
                 self.ref = self.ref+ "".join(additional_ref)
                 return (self.match, self.ref)
-            return self.search_ref_in_text()
             
-        
-        if self.cie.name == "CNP":
-            self.target = fr"(?P<ref2>{self.ref})"
-            self.pattern_txt = re.compile(self.target)
-        
-        if self.cie.name == "MUTUELLE GENERALE":
-            print("SELF.REF", self.ref)
-            regex_ref = self.ref.split("/")
-            self.target = fr"(?P<ref2>{regex_ref[0]}.*?{regex_ref[1]}.*?{regex_ref[2]})"
-            self.pattern_txt = re.compile(self.target)
-        match = list(set([m for m in re.findall(self.target, self.text) if m is not None]))
-        if len(match) == 0:
-            return self.search_ref_in_text()
-        if len(match) == 1:
-            self.match = True
-            self.ref = re.sub("/s", "", match[0])
-            return (self.match, self.ref)
-        
-        self.match = True
-        self.ref = re.sub("/s", "", " ".join(match))
-        return (self.match, self.ref)
+            
+        if self.cie.name in ["CNP", "MUTUELLE GENERALE"]:
+            if self.cie.name == "CNP":
+                self._target = re.compile(fr"(?P<ref2>{self.ref})")
+                
+            
+            if self.cie.name == "MUTUELLE GENERALE":
+                # print("SELF.REF", self.ref)
+                regex_ref = self._ref.split("/")
+                self._target = re.compile(fr"(?P<ref2>{regex_ref[0]}.*?{regex_ref[1]}.*?{regex_ref[2]})")
+                
+            match = list(set([m for m in re.findall(self._target, self.text) if m is not None]))
+            if len(match) > 0:
+                if len(match) == 1:
+                    self.match = True
+                    self.ref = re.sub(r"\s", "", match[0])
+                    return (self.match, self.ref)
+                else:
+                    self.match = True
+                    self.ref = re.sub(r"\s", "", " ".join(match))
+                    return (self.match, self.ref)
+        return self.search_ref_in_text()
+    def find_contrat(self, store=True):
+        self.found = False
+        if self.ref is not None:    
+            query =  {
+                    "$or":[
+                        {"poledi":{"$regex":self.ref}}, 
+                        {"polnum":{"$regex":self.ref}}
+                    ]
+                }
+            self.qualify(query)
+            if store:
+                self._db.db.matches.insert_one(self.__export__())
+        return self
+    
+    def qualify(self, query):
+        from database import DB
+        self._db = DB("AVENANTS", False)
+        nb_match = self._db.db.contrats.count_documents(query)
+        self.found = False
+        if nb_match == 0:
+            #retry for Groupama with chunk
+            if not hasattr(self, "original_ref"): 
+                if self.cie.name == "GROUPAMA":
+                    self.original_ref = self.ref
+                    self.ref = self.ref.split("/")[1]
+                    return self.qualify(query)
+            self.matches = {"count": nb_match, "poledis": [], "numpers": [], "catcods": [], "fams": []}
+                # elif self.cie.name == "HENNER":
+                #     self.original_ref = self.ref
+                #     self.ref = self.ref.replace("/", "")
+                #     return self.qualify(query)
+                # else:
+                #     print(self.cie.name, self.ref, "Not Found")
+            #else simply not found
+            # print(self.filename, ": contrat not found", self.found, "with ref", self.ref, "for CIE", self.cie.name)
+            return self.found
+        poledis = self._db.contrats.find(query).distinct('poledi')
+        if len(poledis) > 1:
+            
+            # for poledi in poledis:
 
-
+            #     print(self.ref, poledi)
+            # print("Police edition is not unique, stretching query with exact match")
+            stretch_query = {
+                
+                "cie.name": self.cie.name,
+                "$or":[
+                    {"poledi":self.ref}, 
+                    {"polnum":self.ref}
+                ]
+            }
+            return self.qualify(stretch_query)
+        if len(poledis) == 1:
+            self.found = True
+            catcodes = self._db.contrats.find(query).distinct('catcod')
+            fams = self._db.contrats.find(query).distinct('fam')
+            numperiodes = self._db.contrats.find(query).distinct('numper')
+            
+            self.matches = {"count": nb_match, "poledis": poledis, "numpers": numperiodes, "catcods": catcodes, "fams": fams}
+            first_match = self._db.contrats.find_one(query)
+            if len(numperiodes) == 1:
+                self.catcod = first_match['catcod']
+                self.prd = first_match['prd']
+                self.opt = first_match['opt']
+                self.fam = first_match['fam']
+                self.poledi = poledis[0]
+                self.polnum = first_match["polnum"]
+                self.entrai = first_match["entrai"]
+                self.entnum = first_match["entnum"]
+                self.numper = numperiodes[0]
+                # print(self.filename, ": contrat found", self.found, "with ref", self.ref, "for CIE", self.cie.name, "with numper", self.numper, self.catcod, self.fam)
+                return self.found
+            
+            self.poledi = poledis[0]
+            self.polnum = first_match["polnum"]
+            self.entrai = first_match["entrai"]
+            self.entnum = first_match["entnum"]
+            if len(fams) == 1:
+                self.fam = fams[0]
+            self.numper = None
+            return self.found
     def __str__(self):
         return f"Document ({self.filename})"
-    def __document__(self):
+    def __export__(self):
         '''Compatible with Mongo Import'''
-        self.dict_xport = {k: v for k,v in self.__dict__.items() if "cie" not in k}
+        self.dict_xport = {k: v for k,v in self.__dict__.items() if "cie" not in k and not k.startswith("_")}
         self.dict_xport["cie"] = {"name": self.cie.name}
+        print(self.dict_xport)
         return self.dict_xport
-        
+    
+
     
     
 if __name__ == "__main__":
-    d1 = Document("./avenants_input/CNP ASSURANCES/AVT/01012025 - AVENANT - COUVENT DES SOEURS FRANCISCAINES - 2529Z.pdf")
-    assert (d1.cie.name == "CNP", d1.cie.name)
-    assert (d1.ref == "2529Z", d1.ref)
-    d2 = Document("./avenants_input/AXA/TIR/AVT/AFCE FORMATION_2275781410000_1.pdf")
-    assert (d2.cie.name == "AXA")
-    assert (d2.ref == "2275781410000Z50", d2.ref)
-    d3 = Document('./avenants_input/MH/TIR/CONTRATS_20241118_001662_11.pdf')
-    assert (d3.cie.name == "HUMANIS")
-    assert (d3.ref == None, d3.ref)
-    d4 = Document("./avenants_input/UNIPREVOYANCE/TIR/AVT/ADAX'O INTERNATIONAL_4360136160000B_SANTE.pdf")
-    assert (d4.cie.name == "UNIPREVOYANCE")
-    assert (d4.ref == "4360136160000BF2417", d4.ref)
-    d5= Document("./avenants_input/LMG/AVT/REV_STD_LAVT_SANTE_R_PMSS_MG-S-2012275S_TREVNAS_FLUVIAL.pdf")
-    assert (d5.cie.name == "MUTUELLE GENERALE")
-    assert (d5.ref == "MG/S/2012275S", d5.ref)
+    from database import DB
+    db = DB("AVENANTS", False)
+    docs = db.documents.find()
+    print("ANCIEN NOM\tNOUVEAU NOM\tREF DANS DOC\tN° de CONTRAT\tN° de PERIODE\tCAT CODE\tFAM\tENTRAI\tENTNUM\t")
+    for doc in docs:
+        d = Document(doc["input_filepath"])
+        d.find_contrat()
+        row = [d.input_filepath.replace("./avenants_input/", "S://Contrat\1 - INDEXATIONS/indexation_2025/"), str(d.numper), str(d.ref), str(d.polnum),  str(d.poledi),";".join(d.matches["numpers"]), ";".join(d.matches["catcods"]), str(d.entrai), str(d.entnum)]
+        print("\t".join(row))
+        # if d2.found: 
+        #     print(d2.ref, d2.matches)
+        
+        
+    #print(d2.find_contrat())
+    # assert (d1.cie.name == "CNP", d1.cie.name)
+    # assert (d1.ref == "2529Z", d1.ref)
+    # d2 = Document("./avenants_input/AXA/TIR/AVT/AFCE FORMATION_2275781410000_1.pdf")
+    # assert (d2.cie.name == "AXA")
+    # assert (d2.ref == "2275781410000Z50", d2.ref)
+    # d3 = Document('./avenants_input/MH/TIR/CONTRATS_20241118_001662_11.pdf')
+    # assert (d3.cie.name == "HUMANIS")
+    # assert (d3.ref == None, d3.ref)
+    # d4 = Document("./avenants_input/UNIPREVOYANCE/TIR/AVT/ADAX'O INTERNATIONAL_4360136160000B_SANTE.pdf")
+    # assert (d4.cie.name == "UNIPREVOYANCE")
+    # assert (d4.ref == "4360136160000BF2417", d4.ref)
+    # d5= Document("./avenants_input/LMG/AVT/REV_STD_LAVT_SANTE_R_PMSS_MG-S-2012275S_TREVNAS_FLUVIAL.pdf")
+    # assert (d5.cie.name == "MUTUELLE GENERALE")
+    # assert (d5.ref == "MG/S/2012275S", d5.ref)
    
