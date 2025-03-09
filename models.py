@@ -404,7 +404,7 @@ class Document:
             
             if self.cie.name == "MUTUELLE GENERALE":
                 # print("SELF.REF", self.ref)
-                regex_ref = self._ref.split("/")
+                regex_ref = self.ref.split("/")
                 self._target = re.compile(fr"(?P<ref2>{regex_ref[0]}.*?{regex_ref[1]}.*?{regex_ref[2]})")
                 
             match = list(set([m for m in re.findall(self._target, self.text) if m is not None]))
@@ -519,11 +519,11 @@ if __name__ == "__main__":
     for doc in docs:
         d = Document(doc["input_filepath"])
         d.find_contrat()
-        row = [d.input_filepath.replace("./avenants_input/", "S://Contrat\1 - INDEXATIONS/indexation_2025/"), str(d.numper), str(d.ref), str(d.polnum),  str(d.poledi),";".join(d.matches["numpers"]), ";".join(d.matches["catcods"]), str(d.entrai), str(d.entnum)]
-        print("\t".join(row))
+        # row = [d.input_filepath.replace("./avenants_input/", "S://Contrat\1 - INDEXATIONS/indexation_2025/"), str(d.numper), str(d.ref), str(d.polnum),  str(d.poledi),";".join(d.matches["numpers"]), ";".join(d.matches["catcods"]), str(d.entrai), str(d.entnum)]
+        # print("\t".join(row))
         # if d2.found: 
         #     print(d2.ref, d2.matches)
-        
+    
         
     #print(d2.find_contrat())
     # assert (d1.cie.name == "CNP", d1.cie.name)
