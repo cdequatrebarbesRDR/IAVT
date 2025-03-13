@@ -196,8 +196,11 @@ class Document:
             self.build_from_path(args[0])
         elif isinstance(args[0], dict):
             self.build_from_db(args[0])
-        # if isinstance(args, str) or "filepath" in kwargs:
-        #     self.build_from_path(args)
+        elif "filepath" in kwargs:
+            self.build_from_path(kwargs["filepath"])
+        elif "record" in kwargs:
+            self.build_from_db(kwargs["record"])
+            
     def build_from_path(self, filepath:str):
         self.found = False
         self.ref = None
@@ -219,55 +222,11 @@ class Document:
                 setattr(self, "cie",c)
             else: 
                 setattr(self, k,v)
+        self.get_ref()
         return self
 
 
-    def get_compagnie(self):
-        if self.text is None:
-            self.scan()
-        '''Rechercher le nom de la Compagnie d'Assurance dans le texte'''
-        for cie_name, cie_rules in COMPAGNIE_NOM_RULES.items():
-            c = Compagnie()
-            cie_match = re.search(cie_name, self.text)
-            if cie_match is not None:
-                c.build_from_name(cie_rules)
-                c.get_rules()
-                self.cie = c
-                return self.cie
-        # print(f"Compagnie name not found in doc text : {self.filepath}.\n Trying with folder name")
-        # self.cie = {"name": "", "folder": ""}
-        # Method using folder HINT
-        for cie_dir,cie_name  in COMPAGNIE_FOLDER_CIENOM.items():
-            
-            if "/"+cie_dir in self.filepath:
-                c = Compagnie()
-                c.build_from_folder(cie_dir)
-                c.get_rules()
-                # print(re.search(c.name, self.text))
-                # cast to dict to insert in mongo
-                self.cie = c
-                return self.cie
-        self.cie = Compagnie()
-        self.cie.name = "Unknown"
-        return self
-
-    def guess_fam(self):
-        '''Rule to detect famille de risque'''
-        if " obseque " or " obsèque " in self.text.lower():
-            self.famille = "OBS"
-            return self.famille
-        if " santé " or " sante " in self.text.lower():
-            self.famille = "MAL"
-            return self.famille
-        if " prévoyance" or " prevoyance" in self.text.lower():
-            self.famille = "PRE"
-            return self.famille
-        self.famille = "DIV"
-        return self.famille
     
-    def choose_numper_by_catcode(self, catcodes):
-        '''Given catcodes checkout text finding match from specific to generic'''
-
     def normalize_filename(self, filepath, output_dir="CANDIDATES"):
         '''Slugify filename and write text into doc .txt'''
         self.input_filepath = filepath
@@ -286,14 +245,6 @@ class Document:
             f.write(self.text)
             
         return self
-    
-    def get_ref(self):
-        if self.cie.search_in_fn:
-            self.search_ref_in_filename()
-            return self.validate_ref_in_text()
-        self.match = True
-        return self.search_ref_in_text()
-    
     def scan(self):
         if self.text is None:
             self.get_text()
@@ -325,6 +276,43 @@ class Document:
             else:
                 self.text = re.sub(r"\s\s", ' ', " ".join(pages)).strip()        
         return self.text
+    
+    def get_compagnie(self):
+        if self.text is None:
+            self.scan()
+        '''Rechercher le nom de la Compagnie d'Assurance dans le texte'''
+        for cie_name, cie_rules in COMPAGNIE_NOM_RULES.items():
+            c = Compagnie()
+            cie_match = re.search(cie_name, self.text)
+            if cie_match is not None:
+                c.build_from_name(cie_rules)
+                c.get_rules()
+                self.cie = c
+                return self.cie
+        # print(f"Compagnie name not found in doc text : {self.filepath}.\n Trying with folder name")
+        # self.cie = {"name": "", "folder": ""}
+        # Method using folder HINT
+        for cie_dir,cie_name  in COMPAGNIE_FOLDER_CIENOM.items():
+            
+            if "/"+cie_dir in self.filepath:
+                c = Compagnie()
+                c.build_from_folder(cie_dir)
+                c.get_rules()
+                # print(re.search(c.name, self.text))
+                # cast to dict to insert in mongo
+                self.cie = c
+                return self.cie
+        self.cie = Compagnie()
+        self.cie.name = "Unknown"
+        return self
+     
+    def get_ref(self):
+        if self.cie.search_in_fn:
+            self.search_ref_in_filename()
+            return self.validate_ref_in_text()
+        self.match = True
+        return self.search_ref_in_text()
+    
       
     def search_ref_in_filename(self):
         '''Some of the documents have a ref number in the filename: used as a hint'''
@@ -373,7 +361,7 @@ class Document:
         if self.cie.name == "GROUPAMA":
             self.ref = "/".join(self.ref.split("/")[0:2])
         return (self.match, self.ref)
-    
+        
     def validate_ref_in_text(self):
         '''Search complete contrat nb in text given a ref pattern'''
         self.match = False
@@ -418,107 +406,56 @@ class Document:
                     self.ref = re.sub(r"\s", "", " ".join(match))
                     return (self.match, self.ref)
         return self.search_ref_in_text()
-    def find_contrat(self, store=True):
-        self.found = False
-        if self.ref is not None:    
-            query =  {
-                    "$or":[
-                        {"poledi":{"$regex":self.ref}}, 
-                        {"polnum":{"$regex":self.ref}}
-                    ]
-                }
-            self.qualify(query)
-            if store:
-                self._db.db.matches.insert_one(self.__export__())
-        return self
-    
-    def qualify(self, query):
-        from database import DB
-        self._db = DB("AVENANTS", False)
-        nb_match = self._db.db.contrats.count_documents(query)
-        self.found = False
-        if nb_match == 0:
-            #retry for Groupama with chunk
-            if not hasattr(self, "original_ref"): 
-                if self.cie.name == "GROUPAMA":
-                    self.original_ref = self.ref
-                    self.ref = self.ref.split("/")[1]
-                    return self.qualify(query)
-            self.matches = {"count": nb_match, "poledis": [], "numpers": [], "catcods": [], "fams": []}
-                # elif self.cie.name == "HENNER":
-                #     self.original_ref = self.ref
-                #     self.ref = self.ref.replace("/", "")
-                #     return self.qualify(query)
-                # else:
-                #     print(self.cie.name, self.ref, "Not Found")
-            #else simply not found
-            # print(self.filename, ": contrat not found", self.found, "with ref", self.ref, "for CIE", self.cie.name)
-            return self.found
-        poledis = self._db.contrats.find(query).distinct('poledi')
-        if len(poledis) > 1:
-            
-            # for poledi in poledis:
 
-            #     print(self.ref, poledi)
-            # print("Police edition is not unique, stretching query with exact match")
-            stretch_query = {
-                
-                "cie.name": self.cie.name,
-                "$or":[
-                    {"poledi":self.ref}, 
-                    {"polnum":self.ref}
-                ]
-            }
-            return self.qualify(stretch_query)
-        if len(poledis) == 1:
-            self.found = True
-            catcodes = self._db.contrats.find(query).distinct('catcod')
-            fams = self._db.contrats.find(query).distinct('fam')
-            numperiodes = self._db.contrats.find(query).distinct('numper')
-            
-            self.matches = {"count": nb_match, "poledis": poledis, "numpers": numperiodes, "catcods": catcodes, "fams": fams}
-            first_match = self._db.contrats.find_one(query)
-            if len(numperiodes) == 1:
-                self.catcod = first_match['catcod']
-                self.prd = first_match['prd']
-                self.opt = first_match['opt']
-                self.fam = first_match['fam']
-                self.poledi = poledis[0]
-                self.polnum = first_match["polnum"]
-                self.entrai = first_match["entrai"]
-                self.entnum = first_match["entnum"]
-                self.numper = numperiodes[0]
-                # print(self.filename, ": contrat found", self.found, "with ref", self.ref, "for CIE", self.cie.name, "with numper", self.numper, self.catcod, self.fam)
-                return self.found
-            
-            self.poledi = poledis[0]
-            self.polnum = first_match["polnum"]
-            self.entrai = first_match["entrai"]
-            self.entnum = first_match["entnum"]
-            if len(fams) == 1:
-                self.fam = fams[0]
-            self.numper = None
-            return self.found
     def __str__(self):
         return f"Document ({self.filename})"
     def __export__(self):
         '''Compatible with Mongo Import'''
         self.dict_xport = {k: v for k,v in self.__dict__.items() if "cie" not in k and not k.startswith("_")}
         self.dict_xport["cie"] = {"name": self.cie.name}
-        print(self.dict_xport)
+        # print(self.dict_xport)
         return self.dict_xport
     
-
+    def store(self, reset=False, dbname = "AVENANTS_CONTRATS"):
+        from database import DB
+        db = DB(dbname)
+        if reset:
+            db.db["documents"].insert_one(self.__export__())
+            return self
+        record = db.db.documents.find_one({"filename": self.filename}, {"_id":1})
+        if record is not None:
+            db.db["documents"].update_one({"_id": record["_id"]}, {"$set":self.__export__()}, True)
+        else:
+            db.db["documents"].insert_one(self.__export__())
+        return self
     
+    def match_contrat(self, dbname = "AVENANTS_CONTRATS"):
+        from database import DB
+        db = DB(dbname, False)
+        if self.ref is None:
+            self.status = False
+            self.message = "KO: detection du numéro de contrat"
+            return self
+        self.status, contrat = db.search_contrat(self.ref, self.cie.name)
+        if self.status:
+            
+            for k,v in contrat.items():
+                if k != "_id":
+                    setattr(self,k,v)
+            self.new_filename = f"{self.numper}.pdf"
+        else:
+            self.new_filename = ""
+        return self
+
     
 if __name__ == "__main__":
     from database import DB
-    db = DB("AVENANTS", False)
+    db = DB("AVENANTS_CONTRATS", False)
+    print(db.documents.count_documents({}))
     docs = db.documents.find()
-    print("ANCIEN NOM\tNOUVEAU NOM\tREF DANS DOC\tN° de CONTRAT\tN° de PERIODE\tCAT CODE\tFAM\tENTRAI\tENTNUM\t")
     for doc in docs:
         d = Document(doc["input_filepath"])
-        d.find_contrat()
+        d.match_contrat()
         # row = [d.input_filepath.replace("./avenants_input/", "S://Contrat\1 - INDEXATIONS/indexation_2025/"), str(d.numper), str(d.ref), str(d.polnum),  str(d.poledi),";".join(d.matches["numpers"]), ";".join(d.matches["catcods"]), str(d.entrai), str(d.entnum)]
         # print("\t".join(row))
         # if d2.found: 
