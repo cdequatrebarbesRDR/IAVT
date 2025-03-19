@@ -229,7 +229,7 @@ class DB:
             contrats.append(c)
         return contrats
     
-    def search_police(self, ref:str)->List[int, list|None, list|None]:
+    def search_police(self, ref:str)->List[int, Union[list|None], Union[list|None]]:
         '''search by poledi and then by polnum
         return poledis
         return periodes (numper,cacod, fam)
@@ -252,7 +252,7 @@ class DB:
             periodes.extend(p["periodes"])
         return (poledi_nb, poledis, periodes)
     
-    def select_periode(self, periodes:list)-> List[int,list|None,list|None ]:
+    def select_periode(self, periodes:list)-> List[int,Union[list|None],Union[list|None]]:
         '''Sélectionner un numéro de période'''
         if periodes is None:
             return 0, None, "Aucun numéro de période: KO"
@@ -301,11 +301,11 @@ class DB:
                 filtered_numpers.extend(numper_list)
         return filtered_numpers
     
-    def filter_numpers_by_catcode_whitelist(self, numpers, prioritylist=["ASS", "ENS", "CAD", "NC", "ETM", "TNS"])-> list:
+    def filter_numpers_by_catcode_whitelist(self, numpers:list, prioritylist=["ASS", "ENS", "CAD", "NC", "ETM", "TNS"])-> list:
         '''whitelist: priority code from choose genereic over specific'''
         return [n for n in numpers if n["catcod"] in prioritylist]
     
-    def get_numpers_by_unique_catcodes(self, numpers)-> dict:
+    def get_numpers_by_unique_catcodes(self, numpers:list)-> dict:
         '''
         deduplicate numpers by dict(catcode,fam)
         catcods = {(fam, catcode)= [numper]}
@@ -314,9 +314,58 @@ class DB:
         for key in catcods:
             catcods[key] = [n for n in numpers if key == (n["fam"], n["catcod"])]
         return catcods
-    def order_by_fam_and_catcod(contrats):
+     
+    def filter_contrats(self, contrats: List[Contrat])-> List[Contrat]:
+        catcods = self.order_numper_by_fam_and_catcod(contrats)
+        b_catcods = self.blacklist_catcods(catcods)
+        if b_catcods is not None:
+            if len(b_catcods) == 1:
+                numpers =  b_catcods.values()[0]
+                if len(numpers)== 0:
+                    return contrats
+                if len(numpers) == 1:
+                    return [self.get_contrats_by_period_nb(numpers[0])]
+                #Doublons CATCODES
+                return [self.get_contrats_by_period_nb(n) for n in numpers]
+            else:
+                w_catcods = self.whitelist_catcods(b_catcods)
+                if len(w_catcods) == 1:
+                    numpers =  w_catcods.values()[0]
+                    if len(numpers) == 0:
+                        return contrats
+                    if len(numpers) == 1:
+                        return [self.get_contrats_by_period_nb(numpers[0])]
+                #Doublons CATCODES
+                return [self.get_contrats_by_period_nb(n) for n in numpers]
+
+
+    def order_numper_by_fam_and_catcod(self, contrats):
+        '''Ordonner les numéro de periodes par famille et catcod'''
+        catcods = defaultdict.fromkeys([(n.fam, n.catcod) for n in contrats], [])
+        for key in catcods:
+            catcods[key] = [n.numper for n in contrats if key == (n.fam, n.catcod)]
+        return catcods
     
+    def blacklist_catcods(self, catcods: dict, blacklist:list=["Z", "X", "K"])-> Union[None| dict]:
+        f_catcods = {}
+        for key, values in catcods.items():
+            #fam,catcod = key
+            if key[1][0] not in blacklist:
+                f_catcods[key] = values
+        if len(f_catcods) == 0:
+            return None
+        return f_catcods
     
+    def whitelist_catcods(self, catcods: dict, whitelist:list=["ASS", "ENS", "CAD", "NC", "ETM", "TNS"])-> Union[None| dict]:
+        f_catcods = {}
+        for key, values in catcods.items():
+            #fam,catcod = key
+            if key[1] not in whitelist:
+                f_catcods[key] = values
+        if len(f_catcods) == 0:
+            return None
+        return f_catcods
+
     def get_contrats_by_police(self,police_nb:str)-> List[Contrat]:
         '''Récupérer l'ensemble des contrats à partir d'un numéro de police'''
         contrats = []
