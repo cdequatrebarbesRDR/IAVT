@@ -3,6 +3,7 @@
 import re
 import os
 import shutil
+from typing import List, Union
 #import difflib
 
 # import pdfplumber
@@ -85,17 +86,17 @@ class Compagnie:
         self.search_in_txt = True
         self.get_name()
         self.get_rules()
-
-    def get_name(self):
+    
+    @property
+    def name(self):
+        self.name = None
         if self.slug is None:
-            self.name = None
             return self.name
         try:
             self.name = COMPAGNIE_RULES[self.slug]
+            return self.name
         except KeyError:
-            self.name = None
-        
-        return self.name
+            return self.name
     
     def search_name(self, text):
         for key, value in COMPAGNIE_RULES.items():
@@ -104,14 +105,19 @@ class Compagnie:
                 self.name = value
                 self.get_rules()
                 return
+        raise NotImplementedError
              
     def get_rules(self):
         '''Given NAME get matching rules and pattern'''
         self.poledi_fn = None
-        self.poledi_txt = r"\s(?P<ref>.*?\d*.*?)\s"
+        #generic contrat NB
+        self.poledi_txt = r"\s(?P<ref>.*?\d{3,}.*?)\s"
         self.search_in_fn = False
         self.search_in_txt = True
-        
+        if self.name is None:
+            self._pattern_fn = None
+            self._pattern_txt = re.compile(self.poledi_txt)
+            return self
         if self.name in ["UNIPREVOYANCE", "AXA", "MUTUELLE GENERALE", "CNP"]:
             self.search_in_fn = True
             self.search_in_txt = False
@@ -168,10 +174,11 @@ class Compagnie:
          
             
         if self.poledi_fn is not None and self.search_in_fn:
+            #NB: on ne stocke pas la version compilée dans la BDD
             self._pattern_fn = re.compile(self.poledi_fn)
         self._pattern_txt = re.compile(self.poledi_txt)
         return self
-        #else: #Compagnie rules not implemented
+       
         
     def __export__(self):
         '''export to mongodb'''
@@ -179,96 +186,85 @@ class Compagnie:
         
 class Contrat:
     def __init__(self, cell: dict):
-        '''Les propriétés du contrat sont telles que dans la base'''
+        '''Les propriétés du contrat sont telles que dans l'export CSV'''
         for k, v in cell.items():
             setattr(self, k.lower(), v)
+    @property
+    def numper(self)-> str:
+        return self.numper
+    @property
+    def polnum(self)-> str:
+        return self.polnum
+    
+    @property
+    def poledi(self)-> str:
+        return self.poledi
+    
+    @property
+    def entrai(self)-> str:
+        return self.entrai
+    
+    @property
+    def compagnie(self)-> Compagnie:
+        if hasattr(self, "cienom"):
+            return Compagnie(self.cienom)
+        return Compagnie(None)
         
-        # self.cie = Compagnie(cell["CIENOM"])
-        
-        
+    
     def __str__(self):
-        print(f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.c["name"]} // RAISON SOCIALE {self.entraid}")
-        return f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.c["name"]} // RAISON SOCIALE {self.entraid}"
+        print(f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.compagnie.name} // RAISON SOCIALE {self.entraid}")
+        return f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.compagnie.name} // RAISON SOCIALE {self.entraid}"
     
     def __export__(self):
         '''export to mongodb'''
-        self.dict_xport = {k: v for k,v in self.__dict__.items()}
+        return {k: v for k,v in self.__dict__.items() if k != "compagnie"}
         
-        return self.dict_xport
         
 
 class Document:
     def __init__(self, filepath):
         self.ref = None
         self.police = None
-        # self.polices = []
         self.numper = None
-        # self.numpers = []
         self.normalize_filename(filepath)
         self.get_text()
         self.get_compagnie()
-        if hasattr(self, "cie"):
-            self.get_ref()
+        self.get_ref()
         
-    def normalize_filename(self, filepath):
+    def normalize_filename(self, filepath:str):
         '''Slugify filename and write text into doc .txt'''
         self.filepath = filepath
         self.input_filepath = filepath
         chunks = filepath.split('/')
         filename = chunks[-1]
         self.filename = re.sub(r"[&|\(|\)|']", "", re.sub(r"[\s+|-]", "_", filename))
-        return self
+        return self.filename
     
     def ocr(self):
+        '''OCR using ocrmypdf and transform directly the pdf'''
         cmd = f"ocrmypdf --output-type pdf {self.input_filepath} {self.filepath}"
-        #self.filepath = self.scanned_file
-        output = sp.getoutput(cmd)
-        return self.get_scanned_text()
-    
-    def get_scanned_text(self):
-        try:
-            pages = []
-            with fitz.open(self.filepath) as doc:
-                self.text = ""
-                for page in doc:
-                    content = page.get_text().strip()
-                    if content != '':
-                        pages.append(page.get_text().strip())
-                    # self.text += page.get_text().strip()
-            if len(pages) == 0:
-                self.text = None
-                
-            else:
-                self.text = re.sub(r"\s\s", ' ', " ".join(pages)).strip()
-
-            self.has_text = self.text is not None
-            return self
-        except FileNotFoundError:
-            self.has_text = False
-            self.text = None
-            return self
-        
-    def get_text(self):
-        pages = []
-        if os.path.exists(self.filepath):
-            with fitz.open(self.filepath) as doc:
-                self.text = ""
-                for page in doc:
-                    content = page.get_text().strip()
-                    if content != '':
-                        pages.append(page.get_text().strip())
-                    # self.text += page.get_text().strip()
-            if len(pages) == 0:
-                self.text = None
-            else:
-                self.text = re.sub(r"\s\s", ' ', " ".join(pages)).strip()        
-            self.has_text = self.text is not None
-            return self
-        else:
-            return self.ocr()
+        sp.getoutput(cmd)
+        return 
             
-                
-    def get_compagnie(self):
+    def get_text(self)->str:
+        '''extract text using fitz'''
+        self.ocr()
+        pages = []
+        with fitz.open(self.filepath) as doc:
+            self.text = ""
+            print(doc)
+            for page in doc:
+                content = page.get_text().strip()
+                if content != '':
+                    pages.append(page.get_text().strip())
+        if len(pages) == 0:
+            self.text = None
+        else:
+            self.text = re.sub(r"\s\s", ' ', " ".join(pages)).strip()        
+        self.has_text = self.text is not None
+        return self.text
+            
+    def get_compagnie(self)-> Compagnie:
         '''Rechercher le nom de la Compagnie d'Assurance dans le texte'''
         self.has_compagnie = False
         if self.has_text:
@@ -277,19 +273,20 @@ class Document:
                 if cie_match is not None:
                     self.cie = Compagnie(cie_name)
                     self.has_compagnie = True
-                    return self
+                    return self.cie
             print(f"Compagnie name not found in doc text: {self.filepath}")
-            # self.cie = {"name": "", "folder": ""}
-            # Method using folder HINT
+            # Method using folder HINT in case failed to detect
             for cie_dir,cie_name  in COMPAGNIE_RULES.items():
                 if cie_dir in self.filepath:
                     self.cie = Compagnie(cie_dir)
                     self.has_compagnie = True
-                    return self
+                    return self.cie
             self.has_compagnie = False
-            return self
+            self.cie = Compagnie(None)
+            return self.cie
      
-    def get_ref(self):
+    def get_ref(self)-> Union[str|None]:
+        self.ref = None
         if self.has_text and self.has_compagnie:
             if self.cie.search_in_fn:
                 self.search_ref_in_filename()
@@ -297,7 +294,7 @@ class Document:
                 if self.valid_ref is False:
                     return self.search_ref_in_text()    
             return self.search_ref_in_text()
-        return self 
+        return self.ref 
     
       
     def search_ref_in_filename(self):
@@ -340,7 +337,6 @@ class Document:
     
     def search_ref_in_text(self):
         '''Search contrat nb in text given a pattern'''
-            
         self.has_ref = False
         if self.text is None:
             return self
@@ -360,7 +356,7 @@ class Document:
         return self
         
     def validate_ref_in_text(self):
-        '''Search complete contrat nb in text given a ref pattern'''
+        '''Search complete contrat nb in text given a ref pattern hint '''
         self.valid_ref = False
         if not hasattr(self, "ref"):
             self.ref = None
@@ -406,22 +402,41 @@ class Document:
                     self.ref = re.sub(r"\s", "", " ".join(match))
                 return self.valid_ref
         return self.valid_ref
+    def get_contrats(self, DB_NAME="avenant_docs"):
+        # méthode d'indexation unitaire a partir d'une reference
+        # qui appelle celle de DB 
+        # import dans la fonction pour éviter les boucles d'import circulaire
+        from database import DB
+        db = DB(DB_NAME)
+        self.contrats = None
+        if self.ref is not None:
+            return db.get_contrats(self.ref)
+        return None
+    
+    def get_contrat(self, DB_NAME="avenant_docs"):
+        # méthode d'indexation unitaire a partir d'une reference
+        # qui appelle celle de DB 
+        # import dans la fonction pour éviter les boucles d'import circulaire
+        from database import DB
+        db = DB(DB_NAME)
+        self.contrats = None
+        if self.police_nb is not None:
+            return db.get_contrats_by_periode(self.police_ng)
+
+
+        
+        
 
     def __str__(self):
         return f"Document ({self.filename})"
     def __export__(self):
-        '''Compatible with Mongo Import'''
+        '''Compatible for mongo'''
         self._dict_xport = {k: v for k,v in self.__dict__.items() if "cie" not in k and not k.startswith("_")}
         if hasattr(self, "cie") and self.cie is not None:
             self._dict_xport["cie"] = {"name": self.cie.name}
         else:
             self._dict_xport["cie"] = None
-        # print(self.dict_xport)
         return self._dict_xport
-    
-    
-    
-
     
 if __name__ == "__main__":
     pass
