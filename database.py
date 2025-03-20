@@ -56,7 +56,7 @@ class DB:
             print(f"Soit un % de réconciliation  {self.global_score * 100} %")
             print("******************************************")
         return self
-    
+    #INIT
     def create_table_contrats(self, init=False, csv_filename="TK2501333.csv", delimiter=";"):
         '''Create Table CONTRATS'''
         if init:
@@ -185,7 +185,7 @@ class DB:
         print(f"\t-Nb de candidats: {self.nb_candidats}")
         return self
 
-                  
+    #OLD              
     def search_poledi(self, ref:str)->list:
         poledis_nb = self.db.poledis.count_documents({"_id": {"$regex": ref}})
         if poledis_nb == 0:
@@ -197,7 +197,7 @@ class DB:
             poledi_items = self.db.poledis.find({"_id": {"$regex": ref}})
             return (poledis_nb, list(poledi_items))
     
-    def search_polnum(self, ref:str)->List[int, list|None]:
+    def search_polnum(self, ref:str)->list:
         polenum_nb = self.db.polnums.count_documents({"_id": {"$regex": ref}})
         if polenum_nb == 0:
             return (polenum_nb, None)
@@ -208,266 +208,134 @@ class DB:
             polenum_items = self.db.polnums.find({"_id": {"$regex": ref}})
             return (polenum_nb, list(polenum_items))
     
-    def get_contrat_by_police_nb(self, police_nb:str)-> Contrat| None:
-        _contrats = self.get_contrats_by_police_nb(police_nb)
-        if len(_contrats) != 1:
-            return None
-        contrats = self.get_contrats_by_period_nb(_contrats[0].numper)
-        if len(contrats) != 1:
-            return None
-        return contrats[0]
-    
-    def get_contrats_by_police_nb(self, police_nb:str)-> List[Contrat]:
+    def get_contrats_by_police_nb(self, police_nb:str)-> List[dict]:
         contrats = []
-        for c in self.db.contrats.find({"$or":[{"$polnum": {"$regex": police_nb}}, {"$poledi": {"$regex": police_nb}}]}):
+        for c in self.db.contrats.find({"$or":[{"polnum": {"$regex": police_nb}}, {"poledi": {"$regex": police_nb}}]}):
             contrats.append(c)
         return contrats
     
-    def get_contrats_by_period_nb(self, period_nb:str)-> List[Contrat]:
+    def get_contrat_by_period_nb(self, police_nb:str)-> dict:
+        return self.db.contrats.find_one({"numper": police_nb})
+        
+    def get_contrats_by_period_nb(self, period_nb:str)-> List[dict]:
         contrats = []
-        for c in self.db.contrats.find({"$numper": period_nb}):
+        for c in self.db.contrats.find({"numper": period_nb}):
             contrats.append(c)
         return contrats
     
-    def search_police(self, ref:str)->List[int, Union[list|None], Union[list|None]]:
-        '''search by poledi and then by polnum
-        return poledis
-        return periodes (numper,cacod, fam)
-        '''
-        poledi_nb, poledis = self.search_poledi(ref)
-        if poledi_nb == 1:
-            return (poledi_nb, poledis, poledis[0]["periodes"])
-        elif poledi_nb == 0:
-            polnum_nb, polnums = self.search_polnum(ref)
-            if polnum_nb == 1:
-                return (polnum_nb, polnums, polnums[0]["periodes"])
-            elif polnum_nb == 0:
-                return (0, None, None)
-            periodes = []
-            for p in polnums:
-                periodes.extend(p["periodes"])
-            return (polnum_nb, polnums,  periodes)
-        periodes = []
-        for p in poledis:
-            periodes.extend(p["periodes"])
-        return (poledi_nb, poledis, periodes)
-    
-    def select_periode(self, periodes:list)-> List[int,Union[list|None],Union[list|None]]:
-        '''Sélectionner un numéro de période'''
-        if periodes is None:
-            return 0, None, "Aucun numéro de période: KO"
-        periodes_nb = len(periodes)
-        if periodes_nb == 0:
-            return 0, None, "Aucun numéro de période: KO" 
-        if len(periodes) == 1:
-            return periodes_nb,[periodes[0]], "Un seul numéro de période: OK"
-        #deduplicate
-        return self.filter_periodes_by_catcod(periodes)
-                 
-        
-        
-    def filter_periodes_by_catcod(self, periodes):
-        '''
-        Filtrer les périodes:
-        - fam,catcod uniques
-        - valides: pas de catcod commençant K Z X
-        - generiques: les catcods les plus generiques ['ENS', 'ASS', 'CAD','NC', 'CA*' ]
-        '''
-        uniq_periodes = self.get_numpers_by_unique_catcodes(periodes)
-        print(uniq_periodes)
-        if len(uniq_periodes) == 1:
-            return len(uniq_periodes), uniq_periodes.values()[0], "Doublons: Choisir le numéro de période "  
-        #filter using blacklist
-        valid_periodes = self.filter_numpers_by_catcode_blacklist(uniq_periodes)
-        if len(valid_periodes) == 0:
-            return len(valid_periodes), periodes, "Aucune catégorie valide:  Choisir le numéro de période"
-        if len(valid_periodes) == 1:
-            return len(valid_periodes), valid_periodes, "Une seule catégorie valide: OK"
-        #filter using whitelist
-        generic_periodes = self.filter_numpers_by_catcode_whitelist(valid_periodes)
-        if len(generic_periodes) == 0:
-            return len(generic_periodes), valid_periodes, "Aucune catégorie générique: Choisir le numéro de période"
-        if len(generic_periodes) == 1:
-            return len(generic_periodes), generic_periodes, "Une seule catégorie valide et générique: OK"
-        else:
-            return len(generic_periodes), generic_periodes, "Plusieurs catégories générique : Choisir le numéro de période"
-        
-        
-    def filter_numpers_by_catcode_blacklist(self, numpers, blacklist=["Z", "X", "K"])-> list:
-        '''blacklist: X, K, Z'''
-        filtered_numpers = []
-        for k, numper_list in numpers.items():
-            if k[1][0] not in blacklist:
-                filtered_numpers.extend(numper_list)
-        return filtered_numpers
-    
-    def filter_numpers_by_catcode_whitelist(self, numpers:list, prioritylist=["ASS", "ENS", "CAD", "NC", "ETM", "TNS"])-> list:
-        '''whitelist: priority code from choose genereic over specific'''
-        return [n for n in numpers if n["catcod"] in prioritylist]
-    
-    def get_numpers_by_unique_catcodes(self, numpers:list)-> dict:
-        '''
-        deduplicate numpers by dict(catcode,fam)
-        catcods = {(fam, catcode)= [numper]}
-        '''
-        catcods = defaultdict.fromkeys([(n["fam"], n["catcod"]) for n in numpers], [])
-        for key in catcods:
-            catcods[key] = [n for n in numpers if key == (n["fam"], n["catcod"])]
-        return catcods
-     
-    def filter_contrats(self, contrats: List[Contrat])-> List[Contrat]:
-        catcods = self.order_numper_by_fam_and_catcod(contrats)
-        b_catcods = self.blacklist_catcods(catcods)
-        if b_catcods is not None:
-            if len(b_catcods) == 1:
-                numpers =  b_catcods.values()[0]
-                if len(numpers)== 0:
-                    return contrats
-                if len(numpers) == 1:
-                    return [self.get_contrats_by_period_nb(numpers[0])]
-                #Doublons CATCODES
-                return [self.get_contrats_by_period_nb(n) for n in numpers]
-            else:
-                w_catcods = self.whitelist_catcods(b_catcods)
-                if len(w_catcods) == 1:
-                    numpers =  w_catcods.values()[0]
-                    if len(numpers) == 0:
-                        return contrats
-                    if len(numpers) == 1:
-                        return [self.get_contrats_by_period_nb(numpers[0])]
-                #Doublons CATCODES
-                return [self.get_contrats_by_period_nb(n) for n in numpers]
-
-
-    def order_numper_by_fam_and_catcod(self, contrats):
+    def order_numper_by_fam_and_catcod(self, contrats: List[dict])-> dict:
         '''Ordonner les numéro de periodes par famille et catcod'''
         catcods = defaultdict.fromkeys([(n.fam, n.catcod) for n in contrats], [])
         for key in catcods:
-            catcods[key] = [n.numper for n in contrats if key == (n.fam, n.catcod)]
+            catcods[key] = [c for c in contrats if key == (c["fam"], c["catcod"])]
         return catcods
     
-    def blacklist_catcods(self, catcods: dict, blacklist:list=["Z", "X", "K"])-> Union[None| dict]:
+    def blacklist_catcods(self, catcods: dict, blacklist:list=["Z", "X", "K"])-> dict:
+        '''Supprimer les contrats qui concernent certains colleges'''
         f_catcods = {}
         for key, values in catcods.items():
             #fam,catcod = key
             if key[1][0] not in blacklist:
                 f_catcods[key] = values
         if len(f_catcods) == 0:
-            return None
+            return catcods
         return f_catcods
-    
-    def whitelist_catcods(self, catcods: dict, whitelist:list=["ASS", "ENS", "CAD", "NC", "ETM", "TNS"])-> Union[None| dict]:
+
+    def whitelist_catcods(self, catcods: dict, whitelist:list=["ASS", "ENS", "CAD", "NC", "ETM", "TNS"])-> dict:
+        '''Selectionner les contrats qui concernent certains colleges'''
         f_catcods = {}
         for key, values in catcods.items():
             #fam,catcod = key
             if key[1] not in whitelist:
                 f_catcods[key] = values
         if len(f_catcods) == 0:
-            return None
+            return catcods
         return f_catcods
-
-    def get_contrats_by_police(self,police_nb:str)-> List[Contrat]:
-        '''Récupérer l'ensemble des contrats à partir d'un numéro de police'''
-        contrats = []
-        for c in self.db.contrats.find({"$or": [{"$poledi": {"$regex": police_nb}},{"$polnum": {"$regex": police_nb}}]}):
-            if "cie" in c.keys():
-                print(c)
-            #     c["cienom"] = c.cie["name"]
-            c = Contrat(c)
-            contrats.append(c)
-        return contrats
-
-
-    def get_contrats_by_periode(self, numper: str)->List[Contrat]:
-        '''Récupérer l'ensemble des contrat à partir d'un numéro de periode'''
-        contrats = []
-        for c in self.db.contrats.find({"numper": numper}):
-            if "cie" in c.keys():
-                print(c)
-            #     c["cienom"] = c.cie["name"]
-            c = Contrat(c)
-            contrats.append(c)
-        return contrats
     
+
+    def filter_contrats_by_catcod(self, contrats:List[dict])-> List[dict]:
+        '''
+        Filtrer les contrats par périodes:
+        - fam,catcod uniques
+        - valides: pas de catcod commençant K Z X
+        - generiques: les catcods les plus generiques ['ENS', 'ASS', 'CAD','NC', 'CA*' ]
+        '''
+        catcodes = self.order_numper_by_fam_and_catcod(contrats)
+        if len(catcodes) ==1:
+            return catcodes.values()
         
-
-    def get_contrat(self, police_nb:str) -> Union[Contrat| None]:
-        polices = self.get_contrats_by_police(police_nb)
-        if len(polices) == 1:
-            periodes = self.get_contrats_by_periode(polices[0].numper)
+        b_catcodes = self.blacklist_catcods(catcodes)
+        if len(b_catcodes) == 1:
+            return b_catcodes.values()
+        if b_catcodes is not None:
+            catcodes = b_catcodes        
+        w_catcodes = self.whitelist_catcods(catcodes)
+        if len(w_catcodes) ==1:
+            return w_catcodes.values()
+        if w_catcodes is not None:
+            catcodes = w_catcodes
+        return catcodes.values()
             
-            if len(periodes) == 1:
-                return periodes[0]
-            if len(periodes) > 1:
-                self.filter_contrats_by_catcod(periodes)
-    
+    def get_contrat_by_police_nb(self, police_nb:str)-> list:
+        '''A partir d'un numéro de contrat renvoyé Trouvé et le Contrat'''
+        polices = self.get_contrats_by_police_nb(police_nb)
+        contrats_nb = len(polices)
+        if contrats_nb == 0:
+            print(f"Aucun contrat avec le numéro de police {police_nb} trouvé")
+            return False, None
+        if 6< contrats_nb > 1:
+            contrats = []
+            for record in polices:
+                numpers.append(self.get_contrats_by_period_nb(record["numper"]))
+            print(f"Plusieurs contrats avec le numéro de police {police_nb} trouvés: {contrats_nb}")
+            return False, polices
+        if contrats_nb == 1:
+            contrats = self.get_contrats_by_period_nb(polices[0]["numper"])
+            contrats_nb = len(contrats)
+            if contrats_nb == 0:
+                return False, polices
+            if contrats_nb == 1:
+                return True, contrats
+            if contrats_nb > 1:
+                periodes = [c["numper"] for c in contrats]            
+                print(f"Plusieurs contrats avec numéros de périodes {periodes} trouvés: {contrats_nb}")
+                filter_contrats = self.filter_contrats_by_catcod(contrats)
+                if len(filter_contrats) == 0:
+                    print(f"Aucun contrat trouvé avec un numéro de période {periodes} valide trouvés parmi les {contrats_nb}")
+                    return False, contrats
+                if len(filter_contrats) == 1:
+                    return True, filter_contrats
+                periodes = [c["numper"] for c in filter_contrats]
+                print(f"Plusieurs contrats filtrés avec numéros de périodes valide trouvés parmi les {contrats_nb}")
+                return False, filter_contrats
 
-    def filter_contrats_by_catcod(periodes:List[Contrat]):
-         
+        return False, contrats
 
     def index_document(self, filepath)-> Document:
         '''Indexer un document en le reliant à un contrat'''
         d = Document(filepath)
         d.online_filepath = d.filepath.replace("./", "S://Contrat/1 - INDEXATIONS/")
         d.status = False
+        d.comment = "Pas de numéro de contrat trouvé avec cette référence"
+        d.contrats_nb = 0
+        d.contrat = None          
         if d.ref is not None:
-            d.police = None
-            d.poledis = None
-            d.numper = None
-            police_nb, d.polices, d.periodes = self.search_police(d.ref)
-            
-            if police_nb == 0:
-                d.comment = "Aucun numéro de police trouvé"
-                return d
-            elif police_nb == 1:
-                d.police = d.polices[0]
-                numpers_nb, d.numpers, d.comment = self.select_periode(d.periodes)
-                if numpers_nb == 0:
-                    d.comment = "Aucun numéro de période trouvé"
-                    
-                    return d
-                if numpers_nb == 1:
-                    # d.comment = "Un seul numéro de période trouvé"
-                    d.numper = d.numpers[0]["numper"]
-                    d.catcod = d.numpers[0]["catcod"]
-                    d.fam = d.numpers[0]["fam"]
-                    d.status = True
-                    return d
-                elif numpers_nb > 1:
-                    d.numper = [x["numper"] for x in d.numpers]
-                    d.catcod = [x["catcod"] for x in d.numpers]
-                    d.fam = [x["fam"] for x in d.numpers]
-                    d.status = False
-                    return d
-                return d
-            else:
-                numpers_nb, d.numpers, d.comment = self.select_periode(d.periodes)
-                d.comment = "Choisir le numéro de police"
-                if numpers_nb == 0:
-                    
-                    d.numper = None
-                    d.catcod = None
-                    d.fam = None
-
-                    return d
-                if numpers_nb == 1:
-                    #d.comment = "Un seul numéro de période trouvé"
-                    #d.police = d.numpers[0]["poledi"]
-                    d.numper = d.numpers[0]["numper"]
-                    d.catcod = d.numpers[0]["catcod"]
-                    d.fam = d.numpers[0]["fam"]
-                    d.status = False
-                    return d
-                elif numpers_nb > 1:
-                    
-                    d.numper = [x["numper"] for x in d.numpers]
-                    d.catcod = [x["catcod"] for x in d.numpers]
-                    d.fam = [x["fam"] for x in d.numpers]
-                    d.status = False
-                    return d
+            d.found, contrats = self.get_contrat_by_police_nb(d.ref)
+            d.status = d.found
+            if d.found:
+                print(contrats)
+                d.contrat = contrats[0]
+                d.contrats_nb = 1
+                d.comment ="OK"
+                d.new_filename =  f"{contrats[0]['numper']}.pdf"
                 
-            return d 
-        d.comment = "Aucune référence détectée"
+            else:
+                if contrats is not None:
+                    d.comment = "Impossible de choisir parmi les contrats"
+                    d.contrats = contrats
+                    d.contrats_nb = len(contrats)
+                
+        self.db.documents.insert_one(d.__export__())
         return d 
         
     def index_documents(self,reset=True, input_folder="./indexation_2025/"):
@@ -476,13 +344,8 @@ class DB:
             self.create_table_candidates(input_folder, True)
         self.db.documents.drop()
         for candidate in self.db.candidats.find():
-            
-            doc = self.index_document(candidate["filepath"])
-            # print(doc.filepath, doc.cie.name, doc.status, doc.comment)
-            document = doc.__export__()
-            self.db.documents.insert_one(document)
+            self.index_document(candidate["filepath"])
             self.db.candidats.delete_one({"filepath":candidate["filepath"]})
-            
         print(self.stats())
 
     def convert_to_csv_file(self, table_name) -> None:
@@ -514,61 +377,37 @@ class DB:
     
     def export(self):
         self.export_OK()
-        self.export_ko()
-        self.export_doublons()
-        self.export_numper_choice()
+        self.export_KO()
+        self.export_CHOICE()
 
     def export_OK(self):
-        with open("NUMPERS_OK.csv", "w") as f:
-            row = "Ancien Nom\tNouveau Nom\tN°Police\tN°Periode\tFamille de Prévoyance\tCategorie de Collège"
+        with open("DOCS_OK.csv", "w") as f:
+            row = "Ancien nom\tNouveau Nom\tN°Police\tN°Periode\tFamille de Prévoyance\tCategorie de Collège\tRaison Sociale"
             f.write(row+"\n")
             for doc in self.db.documents.find({"status": True}):
-                new_name = doc["online_filepath"].replace(doc["online_filepath"].split("/")[-1], f"{doc["numper"]}.pdf")
-                self.db.documents.update_one({"_id": doc["_id"]}, {"$set":{"new_filename": new_name}})
-                r = "\t".join([doc["online_filepath"], new_name, doc["police"]["_id"], doc["numper"], doc["fam"], doc["catcod"]])
+                r = "\t".join([doc["online_filepath"], doc["numper"]+".pdf", doc["police"]["_id"], doc["numper"], doc["fam"], doc["catcod"], doc["entrai"]])
+                f.write(r+"\n")
+    def export_KO(self):
+        with open("DOCS_KO.csv", "w") as f:
+            row = "Nom du fichier complet\tNom du document\tCommentaire"
+            f.write(row+"\n")
+            for doc in self.db.documents.find({"status": False, "nb_contrats": 0}):
+                r = "\t".join([doc["online_filepath"], doc["filename"], doc["comment"]])
                 f.write(r+"\n")
 
-    def export_numper_choice(self):
-        with open("NUMPERS_CHOIX.csv", "w") as f:
-            row = "\t".join(["Ancien Nom", "N° de Police","N° de Contrat"]+["N° de Periode", "Catégorie de Collège", "Famille de risque", "Raison sociale"]*8)+"\n"
+    def export_CHOICE(self):
+        with open("CONTRATS_CHOIX.csv", "w") as f:
+            row = "\t".join(["Ancien Nom", "N° de Police","N° de Contrat", "N° de Periode", "Catégorie de Collège", "Famille de risque", "Raison sociale"])
             f.write(row+"\n")
-            for doc in self.db.documents.find({"comment":{"$regex":"catégories générique"}}):
-                
-                r = [doc["online_filepath"], doc["periodes"][0]["poledi"], doc["periodes"][0]["polnum"]] + ["","", "",""]*8
-                nb_periodes = len(doc["periodes"])
-                periodes_flat = []
-                for p in doc["periodes"]:
-                    periodes_flat.extend([p["numper"], p["catcod"], p["fam"], p["entrai"]])
-                r[2:nb_periodes] = periodes_flat 
-                
-                f.write("\t".join(r)+'\n')
+            for doc in self.db.documents.find({"status":False, "nb_contrats": {"$gt":1}}):
+                for contrat in doc["contrats"]:
+                    r = [doc.online_filepath, contrat["poledi"], contrat["polnum"], contrat["numper"], contrat["fam"], contrat["catcod"], contrat["entrai"]] 
+                    f.write("\t".join(r)+'\n')
     
-    def export_ko(self):
-        with open("NUMPERS_KO.csv", "w") as f:
-            row = "\t".join(["Ancien Nom","N° de Police", "Numéro de période"])+"\n"
-            f.write(row+"\n")
-            for doc in self.db.documents.find({"$or":[{"comment":{"$regex":"Choisir le numéro de police"}}, {"comment": {"$regex": "Aucun numéro de période trouvé" }},{"comment": {"$regex": "Aucun numéro de police trouvé" }}, {"comment": {"$regex": "Aucune référence" }}]}):
-                r = "\t".join([doc["online_filepath"], "", ""])+"\n"
-                f.write(r)
-
-    def export_doublons(self):
-        with open("NUMPERS_DOUBLONS.csv", "w") as f:
-            row = "\t".join(["Ancien Nom", "N° de Police"]+["N°de Contrat","N° de Periode", "Catégorie de Collège", "Famille de risque", "Raison sociale"]*8)+"\n"
-            f.write(row+"\n")
-            for doc in self.db.documents.find({"comment":{"$regex":"Doublons"}}):
-                r = [doc["online_filepath"], doc["periodes"][0]["poledi"]] + ["","", "","",""]*8
-                nb_periodes = len(doc["periodes"])+1
-                periodes_flat = []
-                for p in doc["periodes"]:
-                    periodes_flat.extend([p["polnum"], p["numper"], p["catcod"], p["fam"], p["entrai"]])
-                r[2:nb_periodes] = periodes_flat 
-                print(r)
-                f.write("\t".join(r)+'\n')
-
+    
 if __name__ == "__main__":
-    db = DB("avenant_docs", False)
-    # db.index_documents(reset=True)
+    db = DB("avenants_docs", False)
+    db.index_documents(reset=True)
     db.export_OK()
-    db.export_numper_choice()
-    db.export_doublons()
-    db.export_ko()
+    db.export_KO()
+    db.export_CHOICE()

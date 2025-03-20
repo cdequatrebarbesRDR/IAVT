@@ -84,19 +84,16 @@ class Compagnie:
         self.slug = slug
         self.search_in_fn = False
         self.search_in_txt = True
-        self.get_name()
         self.get_rules()
     
     @property
     def name(self):
-        self.name = None
         if self.slug is None:
-            return self.name
+            return None
         try:
-            self.name = COMPAGNIE_RULES[self.slug]
-            return self.name
+            return COMPAGNIE_RULES[self.slug]    
         except KeyError:
-            return self.name
+            return None
     
     def search_name(self, text):
         for key, value in COMPAGNIE_RULES.items():
@@ -185,35 +182,21 @@ class Compagnie:
         return {k: v for k,v in self.__dict__.items() if not k.startswith("_")}
         
 class Contrat:
-    def __init__(self, cell: dict):
+    def __init__(self, cell: None):
         '''Les propriétés du contrat sont telles que dans l'export CSV'''
+       
         for k, v in cell.items():
-            setattr(self, k.lower(), v)
-    @property
-    def numper(self)-> str:
-        return self.numper
-    @property
-    def polnum(self)-> str:
-        return self.polnum
+            if not k.startswith("_") or "_id" not in k:
+                setattr(self,k.lower(), v)
+        
     
-    @property
-    def poledi(self)-> str:
-        return self.poledi
-    
-    @property
-    def entrai(self)-> str:
-        return self.entrai
-    
+            
     @property
     def compagnie(self)-> Compagnie:
         if hasattr(self, "cienom"):
             return Compagnie(self.cienom)
         return Compagnie(None)
         
-    
-    def __str__(self):
-        print(f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.compagnie.name} // RAISON SOCIALE {self.entraid}")
-        return f"Contrat n°({self.polnum} // Millesime n° {self.poledi} // Compagnie {self.compagnie.name} // RAISON SOCIALE {self.entraid}"
     
     def __export__(self):
         '''export to mongodb'''
@@ -224,8 +207,6 @@ class Contrat:
 class Document:
     def __init__(self, filepath):
         self.ref = None
-        self.police = None
-        self.numper = None
         self.normalize_filename(filepath)
         self.get_text()
         self.get_compagnie()
@@ -252,7 +233,6 @@ class Document:
         pages = []
         with fitz.open(self.filepath) as doc:
             self.text = ""
-            print(doc)
             for page in doc:
                 content = page.get_text().strip()
                 if content != '':
@@ -413,19 +393,26 @@ class Document:
             return db.get_contrats(self.ref)
         return None
     
-    def get_contrat(self, DB_NAME="avenant_docs"):
+    def get_contrat(self, DB_NAME="avenants_docs"):
         # méthode d'indexation unitaire a partir d'une reference
         # qui appelle celle de DB 
         # import dans la fonction pour éviter les boucles d'import circulaire
         from database import DB
         db = DB(DB_NAME)
-        self.contrats = None
-        if self.police_nb is not None:
-            return db.get_contrats_by_periode(self.police_ng)
-
-
-        
-        
+        if self.ref is not None:
+            self.found, contrats = db.get_contrat_by_police_nb(self.ref)
+            if self.found:
+                self.contrat = contrats
+                self.new_filename = self.contrat.numper
+                return self.__export__()
+            else:
+                if len(contrats) > 1:
+                    self.contrats = contrats
+                    return self.__export__()
+        else:
+            self.found = False
+            self.comment = f"reference non detectée"
+            return self.__export__()
 
     def __str__(self):
         return f"Document ({self.filename})"
