@@ -184,13 +184,10 @@ class Compagnie:
 class Contrat:
     def __init__(self, cell: None):
         '''Les propriétés du contrat sont telles que dans l'export CSV'''
-       
         for k, v in cell.items():
             if not k.startswith("_") or "_id" not in k:
                 setattr(self,k.lower(), v)
-        
-    
-            
+
     @property
     def compagnie(self)-> Compagnie:
         if hasattr(self, "cienom"):
@@ -413,6 +410,43 @@ class Document:
             self.found = False
             self.comment = f"reference non detectée"
             return self.__export__()
+    
+    def move(self, OUTPUT_DIR):
+        if self.status is False:
+            self.new_filepath = os.path.join(OUTPUT_DIR, "KO", self.filename)
+        else:
+            self.new_filename = f"{self.numper}.pdf"
+            self.new_filepath = os.path.join(OUTPUT_DIR, self.new_filename)
+        try:
+            shutil.move(self.filepath, self.new_filepath)
+            print("File copied successfully.")
+        except shutil.SameFileError:
+            print("Source and destination represents the same file.")
+        # If there is any permission issue
+        except PermissionError:
+            print("Permission denied.")
+        # For other errors
+        except:
+            print("Error occurred while copying file.")
+        return self
+    
+    def copy(self, OUTPUT_DIR):
+        if self.status is False:
+            return
+        self.new_filename = f"{self.numper}.pdf"
+        self.new_filepath = os.path.join(OUTPUT_DIR, self.new_filename)
+        try:
+            shutil.copy(self.filepath, self.new_filepath)
+            print("File copied successfully.")
+        except shutil.SameFileError:
+            print("Source and destination represents the same file.")
+        # If there is any permission issue
+        except PermissionError:
+            print("Permission denied.")
+        # For other errors
+        except:
+            print("Error occurred while copying file.")
+        return self
 
     def __str__(self):
         return f"Document ({self.filename})"
